@@ -1,55 +1,74 @@
 """GitHub-only NIFTY 50 incremental data + prediction workflow."""
-from src.market_data import update_universe, update_nifty, read_csv, csv_text
+from pathlib import Path
+import pandas as pd
+from config import NIFTY50, OHLCV_DIR, NIFTY_CSV, PREDICTIONS_CSV
+from src.market_data import update_universe, update_nifty
 from src.features import add_features
 from src.fundamentals import get_fundamentals
 from src.ranking import rank_stocks
 from src.prediction import predict_next
 from src.retraining import rolling_retrain
 from src.ledger import read_ledger, ledger_text, save_prediction, evaluate_pending, performance_report
-from config import NIFTY50
 
 
-def run(existing_files: dict[str, str] | None = None):
-    existing_files = existing_files or {}
-    existing = {s: read_csv(existing_files.get(f"data/ohlcv/{s}.csv", "")) for s in NIFTY50}
-    nifty = update_nifty(read_csv(existing_files.get("data/nifty.csv", "")))
-    raw = update_universe(existing)
-    ledger = read_ledger(existing_files.get("data/predictions.csv", ""))
+def main():
+    print("\n=== NIFTY 50 AI STOCK PREDICTOR v2.0 ===")
+    print("Persistence: GitHub files | Rolling window: latest 3 months")
 
+    nifty = update_nifty()
+    raw = update_universe(NIFTY50)
+    if nifty.empty or len(raw) < 10:
+        raise RuntimeError(f"Insufficient market data: NIFTY={len(nifty)}, stocks={len(raw)}")
+
+    # Permanent prediction ledger lives in GitHub, not SQLite.
+    if PREDICTIONS_CSV.exists():
+        ledger = read_ledger(PREDICTIONS_CSV.read_text(encoding="utf-8"))
+    else:
+        ledger = read_ledger()
+
+    # Evaluate pending predictions only when a newer completed session exists.
     actuals = {}
     for symbol, df in raw.items():
         if not df.empty:
             r = df.iloc[-1]
-            actuals[symbol] = {"date": str(df.index[-1].date()), "open": float(r.Open), "high": float(r.High), "low": float(r.Low), "close": float(r.Close)}
+            actuals[symbol] = {"date": str(df.index[-1].date()), "open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]), "close": float(r["Close"])}
     ledger, evaluated = evaluate_pending(ledger, actuals)
+    print(f"Evaluated predictions: {evaluated}")
 
     features = {s: add_features(df, nifty) for s, df in raw.items()}
     fundamentals = {s: get_fundamentals(s) for s in raw}
+    models = rolling_retrain(features)
     top5 = rank_stocks(features, fundamentals)
     if top5.empty:
         raise RuntimeError("No stocks passed the feature quality gate")
 
-    models = rolling_retrain(features)
-    existing_pred = set(ledger.loc[ledger["actual_close"].isna(), "symbol"].astype(str))
-    latest_date = max(str(d.index[-1].date()) for d in raw.values() if not d.empty)
+    latest_date = max(str(df.index[-1].date()) for df in raw.values() if not df.empty)
+    print("\nTOP 5")
+    print(top5.to_string(index=False))
+    print("\nNEXT-DAY PREDICTIONS")
+
+    # Prevent duplicate predictions when Actions is manually run twice for the same session.
+    unresolved = set(ledger.loc[ledger["actual_close"].isna(), "symbol"].astype(str))
     for _, r in top5.iterrows():
         symbol = r.symbol
-        # Never create duplicate predictions for the same unresolved trading session.
-        if symbol in existing_pred:
+        if symbol in unresolved:
+            print(f"{symbol:12s} existing pending prediction - skipped")
             continue
         p = predict_next(symbol, raw[symbol], features[symbol], models)
         ledger = save_prediction(ledger, p, int(r["rank"]), float(r["score"]), target_date=latest_date)
+        print(f"{symbol:12s} Open={p['pred_open']:.2f} High={p['pred_high']:.2f} Low={p['pred_low']:.2f} Close={p['pred_close']:.2f}")
 
+    PREDICTIONS_CSV.parent.mkdir(parents=True, exist_ok=True)
+    PREDICTIONS_CSV.write_text(ledger_text(ledger), encoding="utf-8")
     report = performance_report(ledger)
-    files = {f"data/ohlcv/{s}.csv": csv_text(df) for s, df in raw.items()}
-    files["data/nifty.csv"] = csv_text(nifty)
-    files["data/predictions.csv"] = ledger_text(ledger)
     if not report.empty:
-        files["reports/performance.csv"] = report.to_csv(index=False)
-    print(f"Updated {len(raw)} stocks | evaluated {evaluated} | predictions {len(ledger)}")
-    print(top5.to_string(index=False))
-    return files
+        Path("reports").mkdir(exist_ok=True)
+        report.to_csv("reports/performance.csv", index=False)
+        print("\nMODEL PERFORMANCE")
+        print(report.to_string(index=False))
+
+    print(f"\nComplete. Updated {len(raw)} stocks; evaluated {evaluated}; ledger rows {len(ledger)}.")
 
 
 if __name__ == "__main__":
-    print("Use the GitHub Actions workflow to run the GitHub-only pipeline and commit updated CSV files.")
+    main()
