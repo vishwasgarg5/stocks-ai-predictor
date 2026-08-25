@@ -3,11 +3,16 @@ name: NIFTY 50 Daily AI Prediction
 on:
   workflow_dispatch:
   schedule:
-    # 12:00 UTC = 17:30 IST. NSE closes at 15:30 IST; this runs after the session.
+    # 12:00 UTC = 17:30 IST, after the NSE session.
     - cron: "0 12 * * 1-5"
 
 permissions:
   contents: write
+
+# Prevent concurrent runs from racing on the GitHub-only data store.
+concurrency:
+  group: nifty50-daily-prediction
+  cancel-in-progress: false
 
 jobs:
   predict:
@@ -38,7 +43,7 @@ jobs:
           git add data reports models
           if git diff --cached --quiet; then
             echo "No repository data/model changes to commit."
-          else
-            git commit -m "chore: update NIFTY 50 data predictions and model"
-            git push
+            exit 0
           fi
+          git commit -m "chore: update NIFTY 50 data predictions and model"
+          git push
