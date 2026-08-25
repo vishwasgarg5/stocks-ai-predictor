@@ -13,7 +13,13 @@ def ticker(symbol: str) -> str:
 def _download(symbol_or_ticker: str, start=None, period=None) -> pd.DataFrame:
     kwargs = dict(interval=INTERVAL, auto_adjust=False, progress=False, threads=False)
     if start is not None:
+        # yfinance can reject start dates after today/end. Return empty: there is simply no new data.
+        today = pd.Timestamp.now().normalize()
+        start_ts = pd.Timestamp(start)
+        if start_ts > today:
+            return pd.DataFrame()
         kwargs["start"] = start
+        kwargs["end"] = (today + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     else:
         kwargs["period"] = period or "3mo"
     df = yf.download(symbol_or_ticker, **kwargs)
@@ -32,7 +38,7 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     idx = pd.to_datetime(df.index)
     if getattr(idx, "tz", None) is not None:
         idx = idx.tz_localize(None)
-    df.index = idx
+    df.index = idx.normalize()
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
     return df[~df.index.duplicated(keep="last")].sort_index()
 
@@ -56,6 +62,7 @@ def write_stored(path: Path, df: pd.DataFrame):
 def rolling_trim(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
+    # Calendar-day rolling window; approximately 3 months while retaining all trading sessions.
     cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=ROLLING_DAYS)
     return df.loc[df.index >= cutoff].sort_index()
 
@@ -66,9 +73,10 @@ def incremental_update(symbol: str) -> pd.DataFrame:
     if existing.empty:
         updated = _clean(_download(ticker(symbol), period="3mo"))
     else:
-        start = (existing.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        new = _clean(_download(ticker(symbol), start=start))
-        updated = pd.concat([existing, new])
+        latest = existing.index.max().normalize()
+        start_ts = latest + pd.Timedelta(days=1)
+        new = _clean(_download(ticker(symbol), start=start_ts.strftime("%Y-%m-%d")))
+        updated = pd.concat([existing, new]) if not new.empty else existing
         updated = updated[~updated.index.duplicated(keep="last")].sort_index()
     updated = rolling_trim(updated)
     if len(updated) >= MIN_ROWS:
@@ -95,12 +103,14 @@ def update_nifty() -> pd.DataFrame:
     if existing.empty:
         updated = _clean(_download("^NSEI", period="3mo"))
     else:
-        start = (existing.index.max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        new = _clean(_download("^NSEI", start=start))
-        updated = pd.concat([existing, new])
+        latest = existing.index.max().normalize()
+        start_ts = latest + pd.Timedelta(days=1)
+        new = _clean(_download("^NSEI", start=start_ts.strftime("%Y-%m-%d")))
+        updated = pd.concat([existing, new]) if not new.empty else existing
         updated = updated[~updated.index.duplicated(keep="last")].sort_index()
     updated = rolling_trim(updated)
-    write_stored(NIFTY_CSV, updated)
+    if not updated.empty:
+        write_stored(NIFTY_CSV, updated)
     return updated
 
 
