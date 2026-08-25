@@ -4,8 +4,4 @@ __pycache__/
 venv/
 .env
 .DS_Store
-data/*.csv
-data/*.db
-models/*.json
-models/*.joblib
-reports/*.csv
+# GitHub is the persistent data store; do NOT ignore generated CSV/model files.
