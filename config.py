@@ -2,17 +2,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
+OHLCV_DIR = DATA_DIR / "ohlcv"
 MODEL_DIR = ROOT / "models"
 REPORT_DIR = ROOT / "reports"
-DB_PATH = DATA_DIR / "predictions.db"
+PREDICTIONS_CSV = DATA_DIR / "predictions.csv"
+NIFTY_CSV = DATA_DIR / "nifty.csv"
 
-LOOKBACK_PERIOD = "3mo"
+ROLLING_DAYS = 92
 INTERVAL = "1d"
 MIN_ROWS = 35
 TOP_N = 5
 RANDOM_STATE = 42
 
-# NIFTY 50 symbols. Refreshed from NSE when possible; this list is a fallback.
+# Fallback NIFTY 50 universe. The data engine can refresh the list when an NSE source is available.
 NIFTY50 = [
     "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
     "BAJAJ-AUTO","BAJFINANCE","BAJAJFINSV","BEL","BHARTIARTL",
@@ -33,5 +35,5 @@ FEATURES = [
     "nifty_ret_1d","nifty_ret_5d","relative_ret_5d","relative_ret_20d",
 ]
 
-for d in (DATA_DIR, MODEL_DIR, REPORT_DIR):
+for d in (DATA_DIR, OHLCV_DIR, MODEL_DIR, REPORT_DIR):
     d.mkdir(parents=True, exist_ok=True)
