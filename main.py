@@ -1,59 +1,55 @@
-"""NIFTY 50 3-month rolling daily prediction workflow."""
-from src.market_data import download_universe, download_nifty
+"""GitHub-only NIFTY 50 incremental data + prediction workflow."""
+from src.market_data import update_universe, update_nifty, read_csv, csv_text
 from src.features import add_features
 from src.fundamentals import get_fundamentals
 from src.ranking import rank_stocks
 from src.prediction import predict_next
 from src.retraining import rolling_retrain
-from src.ledger import init_db, save_prediction
-from src.workflow import evaluate_latest_predictions
-from src.evaluation import performance_report
+from src.ledger import read_ledger, ledger_text, save_prediction, evaluate_pending, performance_report
+from config import NIFTY50
 
 
-def main():
-    print("\n=== NIFTY 50 AI STOCK PREDICTOR v1.2 ===")
-    print("Rolling window: latest 3 months | Daily OHLCV")
-    init_db()
+def run(existing_files: dict[str, str] | None = None):
+    existing_files = existing_files or {}
+    existing = {s: read_csv(existing_files.get(f"data/ohlcv/{s}.csv", "")) for s in NIFTY50}
+    nifty = update_nifty(read_csv(existing_files.get("data/nifty.csv", "")))
+    raw = update_universe(existing)
+    ledger = read_ledger(existing_files.get("data/predictions.csv", ""))
 
-    # 1) Download the latest completed market session plus the rolling 3-month window.
-    nifty = download_nifty()
-    if nifty.empty:
-        raise RuntimeError("Unable to download NIFTY index data")
-    raw = download_universe()
-    if len(raw) < 10:
-        raise RuntimeError(f"Too few stocks downloaded: {len(raw)}")
+    actuals = {}
+    for symbol, df in raw.items():
+        if not df.empty:
+            r = df.iloc[-1]
+            actuals[symbol] = {"date": str(df.index[-1].date()), "open": float(r.Open), "high": float(r.High), "low": float(r.Low), "close": float(r.Close)}
+    ledger, evaluated = evaluate_pending(ledger, actuals)
 
-    # 2) First settle yesterday's pending predictions using the newest completed session.
-    evaluated = evaluate_latest_predictions(raw)
-    print(f"Evaluated pending predictions: {evaluated}")
-
-    # 3) Build features and retrain on the current 3-month rolling window.
     features = {s: add_features(df, nifty) for s, df in raw.items()}
     fundamentals = {s: get_fundamentals(s) for s in raw}
-    models = rolling_retrain(features)
-
-    # 4) Rank the full universe and keep only the Top 5.
     top5 = rank_stocks(features, fundamentals)
     if top5.empty:
         raise RuntimeError("No stocks passed the feature quality gate")
 
-    print("\nTOP 5 STOCKS")
-    print(top5.to_string(index=False))
-
-    # 5) Predict the next session and write a durable ledger record.
-    print("\nNEXT-DAY OHLC PREDICTIONS")
-    for _, row in top5.iterrows():
-        symbol = row.symbol
+    models = rolling_retrain(features)
+    existing_pred = set(ledger.loc[ledger["actual_close"].isna(), "symbol"].astype(str))
+    latest_date = max(str(d.index[-1].date()) for d in raw.values() if not d.empty)
+    for _, r in top5.iterrows():
+        symbol = r.symbol
+        # Never create duplicate predictions for the same unresolved trading session.
+        if symbol in existing_pred:
+            continue
         p = predict_next(symbol, raw[symbol], features[symbol], models)
-        save_prediction(p, int(row["rank"]), float(row["score"]))
-        print(f"{symbol:12s} Open={p['pred_open']:.2f} High={p['pred_high']:.2f} Low={p['pred_low']:.2f} Close={p['pred_close']:.2f}")
+        ledger = save_prediction(ledger, p, int(r["rank"]), float(r["score"]), target_date=latest_date)
 
-    report = performance_report()
+    report = performance_report(ledger)
+    files = {f"data/ohlcv/{s}.csv": csv_text(df) for s, df in raw.items()}
+    files["data/nifty.csv"] = csv_text(nifty)
+    files["data/predictions.csv"] = ledger_text(ledger)
     if not report.empty:
-        print("\nMODEL PERFORMANCE")
-        print(report.to_string(index=False))
-    print("\nDaily cycle complete: evaluate -> retrain -> rank -> predict -> ledger.")
+        files["reports/performance.csv"] = report.to_csv(index=False)
+    print(f"Updated {len(raw)} stocks | evaluated {evaluated} | predictions {len(ledger)}")
+    print(top5.to_string(index=False))
+    return files
 
 
 if __name__ == "__main__":
-    main()
+    print("Use the GitHub Actions workflow to run the GitHub-only pipeline and commit updated CSV files.")
