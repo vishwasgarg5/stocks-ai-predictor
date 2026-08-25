@@ -1,18 +1,21 @@
-"""NIFTY 50 3-month rolling prediction and evaluation pipeline."""
+"""NIFTY 50 3-month rolling daily prediction workflow."""
 from src.market_data import download_universe, download_nifty
 from src.features import add_features
 from src.fundamentals import get_fundamentals
 from src.ranking import rank_stocks
-from src.prediction import train_models, predict_next
+from src.prediction import predict_next
+from src.retraining import rolling_retrain
 from src.ledger import init_db, save_prediction
+from src.workflow import evaluate_latest_predictions
 from src.evaluation import performance_report
 
 
 def main():
-    print("\n=== NIFTY 50 AI STOCK PREDICTOR v1.1 ===")
-    print("Data window: latest 3 months | Frequency: daily")
+    print("\n=== NIFTY 50 AI STOCK PREDICTOR v1.2 ===")
+    print("Rolling window: latest 3 months | Daily OHLCV")
     init_db()
 
+    # 1) Download the latest completed market session plus the rolling 3-month window.
     nifty = download_nifty()
     if nifty.empty:
         raise RuntimeError("Unable to download NIFTY index data")
@@ -20,15 +23,24 @@ def main():
     if len(raw) < 10:
         raise RuntimeError(f"Too few stocks downloaded: {len(raw)}")
 
+    # 2) First settle yesterday's pending predictions using the newest completed session.
+    evaluated = evaluate_latest_predictions(raw)
+    print(f"Evaluated pending predictions: {evaluated}")
+
+    # 3) Build features and retrain on the current 3-month rolling window.
     features = {s: add_features(df, nifty) for s, df in raw.items()}
     fundamentals = {s: get_fundamentals(s) for s in raw}
+    models = rolling_retrain(features)
+
+    # 4) Rank the full universe and keep only the Top 5.
     top5 = rank_stocks(features, fundamentals)
     if top5.empty:
         raise RuntimeError("No stocks passed the feature quality gate")
 
-    models = train_models(features)
     print("\nTOP 5 STOCKS")
     print(top5.to_string(index=False))
+
+    # 5) Predict the next session and write a durable ledger record.
     print("\nNEXT-DAY OHLC PREDICTIONS")
     for _, row in top5.iterrows():
         symbol = row.symbol
@@ -38,9 +50,9 @@ def main():
 
     report = performance_report()
     if not report.empty:
-        print("\nHISTORICAL PREDICTION PERFORMANCE")
+        print("\nMODEL PERFORMANCE")
         print(report.to_string(index=False))
-    print("\nPrediction saved. On the next run, pending predictions can be evaluated and the latest 3-month window retrained.")
+    print("\nDaily cycle complete: evaluate -> retrain -> rank -> predict -> ledger.")
 
 
 if __name__ == "__main__":
