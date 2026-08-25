@@ -1,4 +1,5 @@
 """GitHub-only, deterministic NIFTY 50 incremental prediction workflow."""
+from datetime import timedelta
 from src.market_data import update_universe, update_nifty
 from src.features import add_features
 from src.fundamentals import get_fundamentals
@@ -7,6 +8,13 @@ from src.retraining import rolling_retrain
 from src.prediction import predict_next
 from src.ledger import read_ledger, ledger_text, save_prediction, evaluate_pending, performance_report
 from config import NIFTY50, PREDICTIONS_CSV
+
+
+def next_weekday(d):
+    d = d + timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
 
 
 def run():
@@ -33,17 +41,24 @@ def run():
     if top5.empty:
         raise RuntimeError("No stocks passed the quality gate")
 
-    # Deterministic ranking: identical inputs always produce the same ordering.
     top5 = top5.sort_values(["score", "symbol"], ascending=[False, True]).reset_index(drop=True)
     top5["rank"] = range(1, len(top5) + 1)
 
-    models = rolling_retrain(features)
     latest_market_date = max(df.index.max() for df in raw.values()).date()
-    target_session = str(latest_market_date)
-    for _, row in top5.head(5).iterrows():
-        symbol = str(row["symbol"])
-        p = predict_next(symbol, raw[symbol], features[symbol], models)
-        ledger = save_prediction(ledger, p, int(row["rank"]), float(row["score"]), target_date=target_session)
+    target_session = str(next_weekday(latest_market_date))
+    existing_target = set(ledger.loc[ledger["target_date"].astype(str) == target_session, "symbol"].astype(str)) if not ledger.empty else set()
+    needed = [str(x) for x in top5.head(5)["symbol"] if str(x) not in existing_target]
+
+    if needed:
+        models = rolling_retrain(features)
+        for _, row in top5.head(5).iterrows():
+            symbol = str(row["symbol"])
+            if symbol not in needed:
+                continue
+            p = predict_next(symbol, raw[symbol], features[symbol], models)
+            ledger = save_prediction(ledger, p, int(row["rank"]), float(row["score"]), target_date=target_session)
+    else:
+        print(f"Target session {target_session} already has Top-5 predictions; skipping retraining.")
 
     PREDICTIONS_CSV.parent.mkdir(parents=True, exist_ok=True)
     PREDICTIONS_CSV.write_text(ledger_text(ledger), encoding="utf-8")
@@ -51,6 +66,7 @@ def run():
     if not report.empty:
         report.to_csv("reports/performance.csv", index=False)
 
+    print(f"Latest market session: {latest_market_date} | Next target: {target_session}")
     print(f"Stocks updated: {len(raw)} | Predictions evaluated: {evaluated}")
     print("\nTOP 5")
     print(top5.head(5).to_string(index=False))
