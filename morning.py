@@ -1,17 +1,17 @@
-"""Morning job: predict today's session using only completed prior-session data."""
+"""Morning job: predict today's session using only the persisted champion model."""
+from datetime import timedelta
 from config import NIFTY50, PREDICTIONS_CSV
 from src.market_data import update_universe, update_nifty
 from src.features import add_features
 from src.fundamentals import get_fundamentals
 from src.ranking import rank_stocks
-from src.retraining import rolling_retrain
+from src.retraining import load_champion, rolling_retrain
 from src.prediction import predict_next
 from src.ledger import read_ledger, ledger_text, save_prediction
 from src.telegram_report import send_morning_predictions
 
 
 def next_weekday(d):
-    from datetime import timedelta
     d += timedelta(days=1)
     while d.weekday() >= 5:
         d += timedelta(days=1)
@@ -33,7 +33,9 @@ def run():
     features = {s: add_features(df, nifty) for s, df in raw.items()}
     fundamentals = {s: get_fundamentals(s) for s in raw}
     top5 = rank_stocks(features, fundamentals).sort_values(["score", "symbol"], ascending=[False, True]).reset_index(drop=True).head(5)
-    models = rolling_retrain(features)
+    models = load_champion()
+    if models is None:
+        models = rolling_retrain(features)
     telegram_rows = []
     for rank, (_, row) in enumerate(top5.iterrows(), 1):
         symbol = str(row["symbol"])
