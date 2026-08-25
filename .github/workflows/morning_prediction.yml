@@ -1,0 +1,38 @@
+name: NIFTY 50 Morning Prediction
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 03:45 UTC = 09:15 IST, at market open. Prediction uses only completed prior sessions.
+    - cron: "45 3 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nifty50-daily-pipeline
+  cancel-in-progress: false
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Predict today only
+        run: python morning.py
+      - name: Commit prediction ledger
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data reports
+          if git diff --cached --quiet; then echo "No morning prediction changes."; exit 0; fi
+          git commit -m "chore: save morning NIFTY 50 prediction"
+          git push
