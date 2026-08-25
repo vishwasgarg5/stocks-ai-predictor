@@ -3,7 +3,6 @@ name: NIFTY 50 Morning Prediction
 on:
   workflow_dispatch:
   schedule:
-    # 03:45 UTC = 09:15 IST, at market open. Prediction uses only completed prior sessions.
     - cron: "45 3 * * 1-5"
 
 permissions:
@@ -12,6 +11,10 @@ permissions:
 concurrency:
   group: nifty50-daily-pipeline
   cancel-in-progress: false
+
+env:
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
 jobs:
   predict:
