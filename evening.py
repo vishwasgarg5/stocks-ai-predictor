@@ -4,6 +4,7 @@ from src.market_data import update_universe, update_nifty
 from src.ledger import read_ledger, ledger_text, evaluate_pending, performance_report
 from src.features import add_features
 from src.retraining import rolling_retrain
+from src.telegram_report import send_evening
 
 
 def run():
@@ -25,10 +26,12 @@ def run():
     report = performance_report(ledger)
     if not report.empty:
         report.to_csv("reports/performance.csv", index=False)
-    print(f"Market session: {max(df.index.max() for df in raw.values()).date()}")
+    session_date = str(max(df.index.max() for df in raw.values()).date())
+    print(f"Market session: {session_date}")
     print(f"Predictions evaluated: {evaluated}")
     if not report.empty:
         print(report.to_string(index=False))
+    send_evening(session_date, evaluated, report)
 
 if __name__ == "__main__":
     run()
