@@ -29,16 +29,16 @@ def save_prediction(p: dict, rank: int, score: float, target_date=None):
             p["base_close"], p["pred_open"], p["pred_high"], p["pred_low"], p["pred_close"]))
 
 
-def evaluate_pending(actuals: dict[str, dict]):
+def evaluate_pending(actuals: dict[str, dict]) -> int:
+    updated = 0
     with sqlite3.connect(DB_PATH) as con:
         rows = con.execute("SELECT id,symbol,pred_open,pred_high,pred_low,pred_close,base_close FROM predictions WHERE actual_close IS NULL").fetchall()
-        for row in rows:
-            pid, symbol, po, ph, pl, pc, base = row
+        for pid, symbol, po, ph, pl, pc, base in rows:
             a = actuals.get(symbol)
             if not a:
                 continue
             direction = int((pc > base) == (a["close"] > base))
-            con.execute("""UPDATE predictions SET actual_open=?,actual_high=?,actual_low=?,actual_close=?,
-              open_error=?,high_error=?,low_error=?,close_error=?,direction_correct=? WHERE id=?""",
-              (a["open"],a["high"],a["low"],a["close"],
-               a["open"]-po,a["high"]-ph,a["low"]-pl,a["close"]-pc,direction,pid))
+            con.execute("""UPDATE predictions SET target_date=COALESCE(target_date,?), actual_open=?,actual_high=?,actual_low=?,actual_close=?, open_error=?,high_error=?,low_error=?,close_error=?,direction_correct=? WHERE id=?""",
+              (a.get("date"), a["open"],a["high"],a["low"],a["close"], a["open"]-po,a["high"]-ph,a["low"]-pl,a["close"]-pc,direction,pid))
+            updated += 1
+    return updated
