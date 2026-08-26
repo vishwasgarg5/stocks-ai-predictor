@@ -7,6 +7,7 @@ MODEL_DIR = ROOT / "models"
 REPORT_DIR = ROOT / "reports"
 PREDICTIONS_CSV = DATA_DIR / "predictions.csv"
 NIFTY_CSV = DATA_DIR / "nifty.csv"
+UNIVERSE_CSV = DATA_DIR / "nifty150_universe.csv"
 
 ROLLING_DAYS = 92
 INTERVAL = "1d"
@@ -14,7 +15,7 @@ MIN_ROWS = 35
 TOP_N = 5
 RANDOM_STATE = 42
 
-# Fallback NIFTY 50 universe. The data engine can refresh the list when an NSE source is available.
+# Kept as a fallback for environments where the official constituent files are temporarily unavailable.
 NIFTY50 = [
     "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
     "BAJAJ-AUTO","BAJFINANCE","BAJAJFINSV","BEL","BHARTIARTL",
