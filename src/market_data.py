@@ -1,9 +1,15 @@
+import io
 import time
 from typing import Dict
 from pathlib import Path
 import pandas as pd
+import requests
 import yfinance as yf
-from config import INTERVAL, ROLLING_DAYS, MIN_ROWS, NIFTY50, OHLCV_DIR, NIFTY_CSV
+from config import INTERVAL, ROLLING_DAYS, MIN_ROWS, NIFTY50, OHLCV_DIR, NIFTY_CSV, UNIVERSE_CSV
+
+
+NIFTY100_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+MIDCAP50_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftymidcap50list.csv"
 
 
 def ticker(symbol: str) -> str:
@@ -13,7 +19,6 @@ def ticker(symbol: str) -> str:
 def _download(symbol_or_ticker: str, start=None, period=None) -> pd.DataFrame:
     kwargs = dict(interval=INTERVAL, auto_adjust=False, progress=False, threads=False)
     if start is not None:
-        # yfinance can reject start dates after today/end. Return empty: there is simply no new data.
         today = pd.Timestamp.now().normalize()
         start_ts = pd.Timestamp(start)
         if start_ts > today:
@@ -62,9 +67,53 @@ def write_stored(path: Path, df: pd.DataFrame):
 def rolling_trim(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
-    # Calendar-day rolling window; approximately 3 months while retaining all trading sessions.
     cutoff = pd.Timestamp.now().normalize() - pd.Timedelta(days=ROLLING_DAYS)
     return df.loc[df.index >= cutoff].sort_index()
+
+
+def _read_universe_cache() -> list[str]:
+    if not UNIVERSE_CSV.exists():
+        return []
+    try:
+        df = pd.read_csv(UNIVERSE_CSV)
+        return sorted(set(df["Symbol"].astype(str).str.strip().str.upper()))
+    except Exception:
+        return []
+
+
+def _fetch_index_symbols(url: str) -> list[str]:
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "text/csv,*/*"}
+    response = requests.get(url, headers=headers, timeout=20)
+    response.raise_for_status()
+    df = pd.read_csv(io.BytesIO(response.content))
+    symbol_col = next((c for c in df.columns if str(c).strip().lower() in {"symbol", "symbols"}), None)
+    if symbol_col is None:
+        raise ValueError(f"No Symbol column in {url}")
+    return sorted(set(df[symbol_col].astype(str).str.strip().str.upper()))
+
+
+def get_nifty150_universe() -> list[str]:
+    """Build Nifty 150 as Nifty 100 + Nifty Midcap 50, de-duplicated.
+
+    Constituents are refreshed from NSE Indices official constituent files. A GitHub-stored
+    cache is used if the official endpoint is temporarily unavailable, so scheduled runs
+    remain reproducible and do not silently shrink back to Nifty 50.
+    """
+    try:
+        large = _fetch_index_symbols(NIFTY100_URL)
+        mid = _fetch_index_symbols(MIDCAP50_URL)
+        universe = sorted(set(large + mid))
+        if len(universe) < 140:
+            raise ValueError(f"Unexpected Nifty 150 universe size: {len(universe)}")
+        pd.DataFrame({"Symbol": universe}).to_csv(UNIVERSE_CSV, index=False)
+        print(f"Nifty 150 universe refreshed: {len(universe)} symbols")
+        return universe
+    except Exception as exc:
+        cached = _read_universe_cache()
+        if len(cached) >= 140:
+            print(f"Nifty 150 refresh unavailable; using cached universe: {len(cached)} symbols ({exc})")
+            return cached
+        raise RuntimeError(f"Unable to load Nifty 150 universe and no valid cache exists: {exc}")
 
 
 def incremental_update(symbol: str) -> pd.DataFrame:
@@ -84,14 +133,15 @@ def incremental_update(symbol: str) -> pd.DataFrame:
     return updated
 
 
-def update_universe(symbols=NIFTY50) -> Dict[str, pd.DataFrame]:
+def update_universe(symbols=None) -> Dict[str, pd.DataFrame]:
+    symbols = symbols or get_nifty150_universe()
     result = {}
     for i, symbol in enumerate(symbols, 1):
         try:
             df = incremental_update(symbol)
             if len(df) >= MIN_ROWS:
                 result[symbol] = df
-            print(f"[{i:02d}/{len(symbols)}] {symbol}: {len(df)} rows")
+            print(f"[{i:03d}/{len(symbols)}] {symbol}: {len(df)} rows")
         except Exception as exc:
             print(f"{symbol}: ERROR {exc}")
         time.sleep(0.15)
@@ -114,7 +164,7 @@ def update_nifty() -> pd.DataFrame:
     return updated
 
 
-def download_universe(symbols=NIFTY50):
+def download_universe(symbols=None):
     return update_universe(symbols)
 
 
