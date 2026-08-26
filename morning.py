@@ -3,8 +3,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
 
-from config import NIFTY50, PREDICTIONS_CSV
-from src.market_data import update_universe, update_nifty
+from config import PREDICTIONS_CSV
+from src.market_data import update_universe, update_nifty, get_nifty150_universe
 from src.features import add_features
 from src.fundamentals import get_fundamentals
 from src.ranking import rank_stocks
@@ -19,11 +19,12 @@ IST = ZoneInfo("Asia/Kolkata")
 def run():
     today = datetime.now(IST).date()
     target = str(today)
-
-    raw_all = update_universe(NIFTY50)
+    universe = get_nifty150_universe()
+    raw_all = update_universe(universe)
     nifty_all = update_nifty()
-    if len(raw_all) < 10 or nifty_all.empty:
-        raise RuntimeError(f"Insufficient data: {len(raw_all)} stocks")
+    print(f"Universe: Nifty 150 | constituents configured: {len(universe)} | usable OHLCV: {len(raw_all)}")
+    if len(raw_all) < 50 or nifty_all.empty:
+        raise RuntimeError(f"Insufficient data: {len(raw_all)} usable stocks")
 
     # Hard look-ahead guard: Yahoo may expose today's row before the NSE open.
     # No row dated today or later is allowed into ranking, features, or training.
@@ -33,7 +34,7 @@ def run():
         if len(clean) >= 20:
             raw[symbol] = clean
     nifty = nifty_all.loc[pd.to_datetime(nifty_all.index).date < today].copy()
-    if len(raw) < 10 or nifty.empty:
+    if len(raw) < 50 or nifty.empty:
         raise RuntimeError(f"Insufficient prior-session data: {len(raw)} stocks")
 
     prior_session = max(df.index.max().date() for df in raw.values())
