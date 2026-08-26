@@ -1,6 +1,6 @@
 """Evening job: evaluate today's predictions, then retrain only if challenger wins."""
-from config import NIFTY50, PREDICTIONS_CSV
-from src.market_data import update_universe, update_nifty
+from config import PREDICTIONS_CSV
+from src.market_data import update_universe, update_nifty, get_nifty150_universe
 from src.ledger import read_ledger, ledger_text, evaluate_pending, performance_report
 from src.features import add_features
 from src.retraining import champion_challenger
@@ -8,10 +8,12 @@ from src.telegram_report import send_evening
 
 
 def run():
-    raw = update_universe(NIFTY50)
+    universe = get_nifty150_universe()
+    raw = update_universe(universe)
     nifty = update_nifty()
-    if len(raw) < 10 or nifty.empty:
-        raise RuntimeError(f"Insufficient data: {len(raw)} stocks")
+    print(f"Universe: Nifty 150 | constituents configured: {len(universe)} | usable OHLCV: {len(raw)}")
+    if len(raw) < 50 or nifty.empty:
+        raise RuntimeError(f"Insufficient data: {len(raw)} usable stocks")
     ledger = read_ledger(PREDICTIONS_CSV.read_text(encoding="utf-8") if PREDICTIONS_CSV.exists() else "")
     actuals = {}
     for symbol, df in raw.items():
