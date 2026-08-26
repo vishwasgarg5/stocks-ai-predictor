@@ -3,7 +3,8 @@ name: NIFTY 50 Morning Prediction
 on:
   workflow_dispatch:
   schedule:
-    - cron: "45 3 * * 1-5"
+    # 02:15 UTC = 07:45 IST: 90 minutes before NSE opens at 09:15 IST.
+    - cron: "15 2 * * 1-5"
 
 permissions:
   contents: write
@@ -29,7 +30,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Predict today only
+      - name: Predict today's session using prior-session data only
         run: python morning.py
       - name: Commit prediction ledger
         run: |
