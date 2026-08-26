@@ -1,4 +1,4 @@
-name: NIFTY 50 Evening Evaluate and Retrain
+name: NIFTY 150 Evening Evaluate and Retrain
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: nifty50-daily-pipeline
+  group: nifty150-daily-pipeline
   cancel-in-progress: false
 
 env:
@@ -20,7 +20,7 @@ env:
 jobs:
   evaluate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,7 +32,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Evaluate today's predictions and retrain only if challenger wins
         run: python evening.py
-      - name: Commit evaluation and model
+      - name: Commit evaluation, Nifty 150 cache, and model
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
