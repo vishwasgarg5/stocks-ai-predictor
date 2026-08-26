@@ -1,40 +1,30 @@
 import numpy as np
 import pandas as pd
-from xgboost import XGBRegressor
-from config import FEATURES, RANDOM_STATE
 
+STAGE1_FEATURES = [
+    "ret_1d","ret_3d","ret_5d","ret_10d","ret_20d",
+    "ema_5_ratio","ema_10_ratio","ema_20_ratio","ema_50_ratio",
+    "ema_5_slope","ema_20_slope","sma_20_ratio","sma_50_ratio",
+    "rsi_7","rsi_14","macd_pct","macd_signal_pct","macd_hist_pct",
+    "atr_pct","range_pct","gap_pct","volatility_5d","volatility_10d","volatility_20d",
+    "bb_width","bb_position","volume_ratio_5d","volume_ratio_20d",
+    "roc_5d","roc_10d","stoch_k","stoch_d","mfi_14",
+    "nifty_ret_1d","nifty_ret_5d","nifty_ret_20d","nifty_volatility_10d",
+    "nifty_trend","relative_ret_5d","relative_ret_20d","relative_vol_ratio"
+]
 TARGETS = ["target_open", "target_high", "target_low", "target_close"]
-
-
-def train_models(feature_sets: dict[str, pd.DataFrame]) -> dict[str, XGBRegressor]:
-    frames = []
-    for symbol, df in feature_sets.items():
-        clean = df.dropna(subset=FEATURES + TARGETS).copy()
-        if not clean.empty:
-            frames.append(clean)
-    if not frames:
-        raise ValueError("No training rows available")
-    data = pd.concat(frames, ignore_index=True)
-    models = {}
-    for target in TARGETS:
-        model = XGBRegressor(
-            n_estimators=250, max_depth=3, learning_rate=0.04,
-            subsample=0.85, colsample_bytree=0.85,
-            objective="reg:squarederror", random_state=RANDOM_STATE,
-            n_jobs=2
-        )
-        model.fit(data[FEATURES], data[target])
-        models[target] = model
-    return models
 
 
 def predict_next(symbol: str, raw_df: pd.DataFrame, feature_df: pd.DataFrame, models: dict) -> dict:
     latest = feature_df.iloc[-1]
-    x = latest[FEATURES].to_frame().T
+    x = latest[STAGE1_FEATURES].to_frame().T
+    if x.isna().any().any():
+        raise ValueError(f"Insufficient Stage 1 features for {symbol}")
     base_close = float(raw_df["Close"].iloc[-1])
     out = {"symbol": symbol, "base_close": base_close}
-    for target, model in models.items():
-        ret = float(model.predict(x)[0])
+    for target in TARGETS:
+        ret = float(models[target].predict(x)[0])
+        ret = float(np.clip(ret, -0.15, 0.15))
         out[target.replace("target_", "pred_")] = base_close * (1 + ret)
     out["predicted_direction"] = "UP" if out["pred_close"] > base_close else "DOWN"
     return out
