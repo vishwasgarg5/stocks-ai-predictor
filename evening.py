@@ -17,15 +17,21 @@ def run():
     for symbol, df in raw.items():
         if df.empty:
             continue
-        actuals[symbol] = {}
-        for date, r in df.iterrows():
-            actuals[symbol][date.strftime("%Y-%m-%d")] = {"open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]), "close": float(r["Close"])}
+        actuals[symbol] = {
+            date.strftime("%Y-%m-%d"): {
+                "open": float(r["Open"]), "high": float(r["High"]),
+                "low": float(r["Low"]), "close": float(r["Close"])
+            }
+            for date, r in df.iterrows()
+        }
     ledger, evaluated = evaluate_pending(ledger, actuals)
     retrained = False
     champion_mae = challenger_mae = None
+    decision = "NO EVALUATION"
     if evaluated:
         features = {s: add_features(df, nifty) for s, df in raw.items()}
-        _, retrained, champion_mae, challenger_mae = champion_challenger(features)
+        _, retrained, champion_mae, challenger_mae, decision = champion_challenger(features)
+
     PREDICTIONS_CSV.write_text(ledger_text(ledger), encoding="utf-8")
     report = performance_report(ledger)
     if not report.empty:
@@ -34,10 +40,10 @@ def run():
     print(f"Market session: {session_date}")
     print(f"Predictions evaluated: {evaluated}")
     print(f"Model retrained: {'YES' if retrained else 'NO'}")
+    print(f"Model decision: {decision}")
     if champion_mae is not None:
         print(f"Champion validation MAE: {champion_mae:.6f}")
         print(f"Challenger validation MAE: {challenger_mae:.6f}")
-        print(f"Model decision: {'REPLACE CHAMPION' if retrained else 'KEEP CHAMPION'}")
     if not report.empty:
         print(report.to_string(index=False))
     send_evening(session_date, evaluated, ledger, report, retrained, champion_mae, challenger_mae)
