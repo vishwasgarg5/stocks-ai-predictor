@@ -57,7 +57,14 @@ def load_champion():
         return None
     try:
         with MODEL_PATH.open("rb") as f:
-            return pickle.load(f)
+            model = pickle.load(f)
+        if not isinstance(model, dict) or not all(t in model for t in TARGETS):
+            return None
+        # Old Champion models use the previous 19-feature schema.
+        for target in TARGETS:
+            if model[target].get_booster().num_features() != len(STAGE1_FEATURES):
+                return None
+        return model
     except Exception:
         return None
 
@@ -69,7 +76,7 @@ def save_champion(models):
 
 
 def champion_challenger(feature_sets):
-    # Newest 20% is a strict chronological holdout: no future rows enter training.
+    """Use a chronological newest-block holdout and replace Champion only when Challenger wins."""
     data = build_training_frame(feature_sets)
     if len(data) < 30:
         raise ValueError("Not enough Stage 1 rows for validation")
@@ -79,21 +86,13 @@ def champion_challenger(feature_sets):
     challenger_mae = _mae(challenger, valid)
 
     champion = load_champion()
-    champion_mae = None
-    champion_valid_ok = False
-    if champion is not None:
-        try:
-            champion_mae = _mae(champion, valid)
-            champion_valid_ok = np.isfinite(champion_mae)
-        except Exception:
-            champion_valid_ok = False
+    champion_mae = _mae(champion, valid) if champion is not None else None
 
-    # Stage 1 is a deliberate model-schema upgrade. An incompatible old model
-    # cannot be fairly scored with the new feature space, so bootstrap Stage 1 once.
-    if champion is None or not champion_valid_ok or challenger_mae < champion_mae:
+    if champion is None or challenger_mae < champion_mae:
         final_model = fit_model(data)
         save_champion(final_model)
-        return final_model, True, champion_mae, challenger_mae, "REPLACE CHAMPION"
+        decision = "REPLACE CHAMPION" if champion is not None else "BOOTSTRAP STAGE1 CHAMPION"
+        return final_model, True, champion_mae, challenger_mae, decision
     return champion, False, champion_mae, challenger_mae, "KEEP CHAMPION"
 
 
