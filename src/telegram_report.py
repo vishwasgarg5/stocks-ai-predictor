@@ -18,7 +18,7 @@ def send_morning_predictions(prediction_date: str, rows):
     lines = ["<b>📈 AI NSE STOCK PREDICTION</b>", f"Prediction Date: <b>{prediction_date}</b>", "", "<pre>Rank Stock        Score   Open       High       Low        Close\n--------------------------------------------------------------"]
     for rank, row in enumerate(rows, 1):
         lines.append(f"{rank:<4} {row['symbol']:<11} {row['score']:>6.2f}  {row['open']:>9.2f} {row['high']:>9.2f} {row['low']:>9.2f} {row['close']:>9.2f}")
-    lines += ["</pre>", "Data: previous completed trading session"]
+    lines += ["</pre>", "Data: prior completed trading session only"]
     _send("\n".join(lines))
 
 
@@ -33,11 +33,13 @@ def send_evening(session_date, evaluated, ledger, report, retrained=False, champ
                 "Difference " + f"{r['actual_open']-r['pred_open']:>+9.2f} {r['actual_high']-r['pred_high']:>+9.2f} {r['actual_low']-r['pred_low']:>+9.2f} {r['actual_close']-r['pred_close']:>+9.2f}</pre>"]
     if report is not None and not report.empty:
         r = report.iloc[0]
-        lines.append("<pre>OVERALL PERFORMANCE\n-------------------\n" + f"Predictions         {int(r['predictions'])}\nOpen MAE            {r['open_mae']:.2f}\nHigh MAE            {r['high_mae']:.2f}\nLow MAE             {r['low_mae']:.2f}\nClose MAE           {r['close_mae']:.2f}\nDirection Accuracy  {r['direction_accuracy']*100:.1f}%</pre>")
+        lines.append("<pre>ACCURACY\n--------\n" + f"Predictions         {int(r['predictions'])}\nOpen MAE            {r['open_mae']:.2f}\nHigh MAE            {r['high_mae']:.2f}\nLow MAE             {r['low_mae']:.2f}\nClose MAE           {r['close_mae']:.2f}\nOpen MAPE           {r['open_mape']*100:.3f}%\nHigh MAPE           {r['high_mape']*100:.3f}%\nLow MAPE            {r['low_mape']*100:.3f}%\nClose MAPE          {r['close_mape']*100:.3f}%\nOverall OHLC MAPE   {r['ohlc_mape']*100:.3f}%\nDirection Accuracy  {r['direction_accuracy']*100:.1f}%</pre>")
     if evaluated:
-        lines.append("<b>Model retrained: YES — challenger was better</b>" if retrained else "<b>Model retrained: NO — old champion was better</b>")
-        if champion_mae is not None and challenger_mae is not None:
+        if champion_mae is None:
+            lines.append("<b>Model decision: INITIAL CHAMPION CREATED</b>")
+        else:
+            lines.append("<b>Model retrained: YES — challenger was better</b>" if retrained else "<b>Model retrained: NO — old champion was better</b>")
             lines.append(f"Validation MAE: Champion <b>{champion_mae:.6f}</b> | Challenger <b>{challenger_mae:.6f}</b>")
     else:
-        lines.append("Model retrained: NO — no new actuals available")
+        lines.append("<b>Model retrained: NO — no new target-session actuals available</b>")
     _send("\n".join(lines))
