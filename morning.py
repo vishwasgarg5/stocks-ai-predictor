@@ -26,8 +26,6 @@ def run():
     if len(raw_all) < 50 or nifty_all.empty:
         raise RuntimeError(f"Insufficient data: {len(raw_all)} usable stocks")
 
-    # Hard look-ahead guard: Yahoo may expose today's row before the NSE open.
-    # No row dated today or later is allowed into ranking, features, or training.
     raw = {}
     for symbol, df in raw_all.items():
         clean = df.loc[pd.to_datetime(df.index).date < today].copy()
@@ -43,9 +41,20 @@ def run():
     print(f"Training/data cutoff: strictly before {today}; latest usable session: {prior_session}")
 
     ledger = read_ledger(PREDICTIONS_CSV.read_text(encoding="utf-8") if PREDICTIONS_CSV.exists() else "")
-    existing = set(ledger.loc[ledger["target_date"].astype(str) == target, "symbol"].astype(str)) if not ledger.empty else set()
-    if len(existing) >= 5:
-        print(f"Prediction already exists for {target}; no new prediction generated.")
+    existing_rows = ledger[ledger["target_date"].astype(str) == target].copy() if not ledger.empty else pd.DataFrame()
+
+    # Idempotent rerun: never regenerate an existing prediction. Instead resend the
+    # saved five predictions to Telegram so manual/scheduled retries remain useful.
+    if len(existing_rows) >= 5:
+        existing_rows = existing_rows.sort_values(["rank", "symbol"]).head(5)
+        telegram_rows = [
+            {"symbol": str(r["symbol"]), "score": float(r["score"]),
+             "open": float(r["pred_open"]), "high": float(r["pred_high"]),
+             "low": float(r["pred_low"]), "close": float(r["pred_close"])}
+            for _, r in existing_rows.iterrows()
+        ]
+        print(f"Prediction already exists for {target}; reusing saved Top 5 and resending Telegram.")
+        send_morning_predictions(target, telegram_rows)
         return
 
     features = {s: add_features(df, nifty) for s, df in raw.items()}
@@ -59,7 +68,7 @@ def run():
     telegram_rows = []
     for rank, (_, row) in enumerate(top5.iterrows(), 1):
         symbol = str(row["symbol"])
-        if symbol in existing:
+        if symbol in set(existing_rows["symbol"].astype(str)) if not existing_rows.empty else False:
             continue
         p = predict_next(symbol, raw[symbol], features[symbol], models)
         ledger = save_prediction(ledger, p, rank, float(row["score"]), target_date=target)
