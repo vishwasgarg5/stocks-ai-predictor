@@ -1,10 +1,16 @@
-"""Evening job: evaluate today's predictions, then retrain only if challenger wins."""
+"""Evening job: evaluate today's predictions against exact target-date OHLC, then retrain only if challenger wins."""
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import pandas as pd
+
 from config import PREDICTIONS_CSV
-from src.market_data import update_universe, update_nifty, get_nifty150_universe
+from src.market_data import update_universe, update_nifty, get_nifty150_universe, fetch_exact_session
 from src.ledger import read_ledger, ledger_text, evaluate_pending, performance_report
 from src.features import add_features
 from src.retraining import champion_challenger
 from src.telegram_report import send_evening
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def run():
@@ -14,18 +20,26 @@ def run():
     print(f"Universe: Nifty 150 | constituents configured: {len(universe)} | usable OHLCV: {len(raw)}")
     if len(raw) < 50 or nifty.empty:
         raise RuntimeError(f"Insufficient data: {len(raw)} usable stocks")
+
     ledger = read_ledger(PREDICTIONS_CSV.read_text(encoding="utf-8") if PREDICTIONS_CSV.exists() else "")
+
+    # IMPORTANT: use a fresh exact-date fetch for every pending prediction. Cached OHLCV
+    # remains the incremental 3-month store, but it must never be trusted as the actual
+    # when evaluating a historical target session if it may be stale.
     actuals = {}
-    for symbol, df in raw.items():
-        if df.empty:
+    pending = ledger[ledger["actual_close"].isna()].copy() if not ledger.empty else pd.DataFrame()
+    for _, r in pending.iterrows():
+        symbol = str(r["symbol"])
+        target = pd.to_datetime(r["target_date"], errors="coerce")
+        if pd.isna(target):
             continue
-        actuals[symbol] = {
-            date.strftime("%Y-%m-%d"): {
-                "open": float(r["Open"]), "high": float(r["High"]),
-                "low": float(r["Low"]), "close": float(r["Close"])
-            }
-            for date, r in df.iterrows()
-        }
+        actual = fetch_exact_session(symbol, target.strftime("%Y-%m-%d"))
+        if actual is not None:
+            actuals.setdefault(symbol, {})[target.strftime("%Y-%m-%d")] = actual
+            print(f"Exact actual confirmed: {symbol} {target.strftime('%Y-%m-%d')} close={actual['close']:.2f}")
+        else:
+            print(f"Actual not yet available: {symbol} {target.strftime('%Y-%m-%d')}")
+
     ledger, evaluated = evaluate_pending(ledger, actuals)
     retrained = False
     champion_mae = challenger_mae = None
@@ -38,9 +52,14 @@ def run():
     report = performance_report(ledger)
     if not report.empty:
         report.to_csv("reports/performance.csv", index=False)
-    session_date = max(df.index.max() for df in raw.values()).strftime("%Y-%m-%d")
-    print(f"Market session: {session_date}")
-    print(f"Predictions evaluated: {evaluated}")
+
+    evaluated_dates = ledger.loc[
+        ledger["actual_close"].notna(), "target_date"
+    ].astype(str) if not ledger.empty else pd.Series(dtype=str)
+    session_date = max(evaluated_dates) if evaluated_dates.size else datetime.now(IST).date().isoformat()
+
+    print(f"Market/evaluation session: {session_date}")
+    print(f"Predictions evaluated this run: {evaluated}")
     print(f"Model retrained: {'YES' if retrained else 'NO'}")
     print(f"Model decision: {decision}")
     if champion_mae is not None:
@@ -49,6 +68,7 @@ def run():
     if not report.empty:
         print(report.to_string(index=False))
     send_evening(session_date, evaluated, ledger, report, retrained, champion_mae, challenger_mae)
+
 
 if __name__ == "__main__":
     run()
