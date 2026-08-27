@@ -106,17 +106,36 @@ def get_nifty150_universe() -> list[str]:
         raise RuntimeError(f"Unable to load Nifty 150 universe and no valid cache exists: {exc}")
 
 
+def _incremental_window(latest: pd.Timestamp) -> tuple[str, str] | None:
+    """Return a valid yfinance [start, exclusive end) window.
+
+    Never derive the end from the current clock. This avoids yfinance requests where
+    start is accidentally later than end around midnight/time-zone boundaries.
+    """
+    start_date = latest.normalize() + pd.Timedelta(days=1)
+    today = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).normalize()
+    # End is exclusive in yfinance. Include today and leave one extra calendar day
+    # so a completed session today is returned without relying on intraday time.
+    end_date = max(today + pd.Timedelta(days=1), start_date + pd.Timedelta(days=1))
+    if start_date >= end_date:
+        return None
+    return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+
+
 def incremental_update(symbol: str) -> pd.DataFrame:
     path = OHLCV_DIR / f"{symbol}.csv"
     existing = read_stored(path)
     if existing.empty:
         updated = _clean(_download(ticker(symbol), period="3mo"))
     else:
-        latest = existing.index.max().normalize()
-        start_ts = latest + pd.Timedelta(days=1)
-        new = _clean(_download(ticker(symbol), start=start_ts.strftime("%Y-%m-%d")))
-        updated = pd.concat([existing, new]) if not new.empty else existing
-        updated = updated[~updated.index.duplicated(keep="last")].sort_index()
+        window = _incremental_window(existing.index.max())
+        if window is None:
+            updated = existing
+        else:
+            start, end = window
+            new = _clean(_download(ticker(symbol), start=start, end=end))
+            updated = pd.concat([existing, new]) if not new.empty else existing
+            updated = updated[~updated.index.duplicated(keep="last")].sort_index()
     updated = rolling_trim(updated)
     if len(updated) >= MIN_ROWS:
         write_stored(path, updated)
@@ -164,11 +183,14 @@ def update_nifty() -> pd.DataFrame:
     if existing.empty:
         updated = _clean(_download("^NSEI", period="3mo"))
     else:
-        latest = existing.index.max().normalize()
-        start_ts = latest + pd.Timedelta(days=1)
-        new = _clean(_download("^NSEI", start=start_ts.strftime("%Y-%m-%d")))
-        updated = pd.concat([existing, new]) if not new.empty else existing
-        updated = updated[~updated.index.duplicated(keep="last")].sort_index()
+        window = _incremental_window(existing.index.max())
+        if window is None:
+            updated = existing
+        else:
+            start, end = window
+            new = _clean(_download("^NSEI", start=start, end=end))
+            updated = pd.concat([existing, new]) if not new.empty else existing
+            updated = updated[~updated.index.duplicated(keep="last")].sort_index()
     updated = rolling_trim(updated)
     if not updated.empty:
         write_stored(NIFTY_CSV, updated)
