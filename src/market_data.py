@@ -7,7 +7,6 @@ import requests
 import yfinance as yf
 from config import INTERVAL, ROLLING_DAYS, MIN_ROWS, NIFTY50, OHLCV_DIR, NIFTY_CSV, UNIVERSE_CSV
 
-
 NIFTY100_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 MIDCAP50_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftymidcap50list.csv"
 
@@ -16,15 +15,12 @@ def ticker(symbol: str) -> str:
     return f"{symbol}.NS"
 
 
-def _download(symbol_or_ticker: str, start=None, period=None) -> pd.DataFrame:
+def _download(symbol_or_ticker: str, start=None, end=None, period=None) -> pd.DataFrame:
     kwargs = dict(interval=INTERVAL, auto_adjust=False, progress=False, threads=False)
     if start is not None:
-        today = pd.Timestamp.now().normalize()
-        start_ts = pd.Timestamp(start)
-        if start_ts > today:
-            return pd.DataFrame()
         kwargs["start"] = start
-        kwargs["end"] = (today + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if end is not None:
+            kwargs["end"] = end
     else:
         kwargs["period"] = period or "3mo"
     df = yf.download(symbol_or_ticker, **kwargs)
@@ -93,12 +89,6 @@ def _fetch_index_symbols(url: str) -> list[str]:
 
 
 def get_nifty150_universe() -> list[str]:
-    """Build Nifty 150 as Nifty 100 + Nifty Midcap 50, de-duplicated.
-
-    Constituents are refreshed from NSE Indices official constituent files. A GitHub-stored
-    cache is used if the official endpoint is temporarily unavailable, so scheduled runs
-    remain reproducible and do not silently shrink back to Nifty 50.
-    """
     try:
         large = _fetch_index_symbols(NIFTY100_URL)
         mid = _fetch_index_symbols(MIDCAP50_URL)
@@ -131,6 +121,27 @@ def incremental_update(symbol: str) -> pd.DataFrame:
     if len(updated) >= MIN_ROWS:
         write_stored(path, updated)
     return updated
+
+
+def fetch_exact_session(symbol: str, target_date: str) -> dict | None:
+    """Fetch only the requested completed session for evaluation.
+
+    This deliberately bypasses the cached OHLCV ledger so an old/stale cached row cannot
+    be used as the actual for a different prediction date. The one-day fetch is only for
+    the pending prediction(s), not a replacement for incremental 3-month storage.
+    """
+    target = pd.Timestamp(target_date)
+    start = target.strftime("%Y-%m-%d")
+    end = (target + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        df = _clean(_download(ticker(symbol), start=start, end=end))
+        if df.empty or target.normalize() not in df.index:
+            return None
+        r = df.loc[target.normalize()]
+        return {"open": float(r["Open"]), "high": float(r["High"]), "low": float(r["Low"]), "close": float(r["Close"])}
+    except Exception as exc:
+        print(f"Exact-session fetch failed for {symbol} {target_date}: {exc}")
+        return None
 
 
 def update_universe(symbols=None) -> Dict[str, pd.DataFrame]:
