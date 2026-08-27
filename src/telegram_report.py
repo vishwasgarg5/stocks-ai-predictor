@@ -9,9 +9,18 @@ def _send(text: str) -> bool:
     if not token or not chat_id:
         print("Telegram credentials not configured; skipping Telegram notification.")
         return False
-    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=20)
-    r.raise_for_status()
-    return True
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            print(f"Telegram API rejected message: {data}")
+            return False
+        print("Telegram sent successfully")
+        return True
+    except Exception as exc:
+        print(f"Telegram send failed: {exc}")
+        return False
 
 
 def send_morning_predictions(prediction_date: str, rows):
@@ -19,7 +28,7 @@ def send_morning_predictions(prediction_date: str, rows):
     for rank, row in enumerate(rows, 1):
         lines.append(f"{rank:<4} {row['symbol']:<11} {row['score']:>6.2f}  {row['open']:>9.2f} {row['high']:>9.2f} {row['low']:>9.2f} {row['close']:>9.2f}")
     lines += ["</pre>", "Data: prior completed trading session only"]
-    _send("\n".join(lines))
+    return _send("\n".join(lines))
 
 
 def send_evening(session_date, evaluated, ledger, report, retrained=False, champion_mae=None, challenger_mae=None):
@@ -42,4 +51,4 @@ def send_evening(session_date, evaluated, ledger, report, retrained=False, champ
             lines.append(f"Validation MAE: Champion <b>{champion_mae:.6f}</b> | Challenger <b>{challenger_mae:.6f}</b>")
     else:
         lines.append("<b>Model retrained: NO — no new target-session actuals available</b>")
-    _send("\n".join(lines))
+    return _send("\n".join(lines))
