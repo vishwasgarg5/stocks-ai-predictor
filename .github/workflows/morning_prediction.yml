@@ -3,8 +3,8 @@ name: NIFTY 150 Morning Prediction
 on:
   workflow_dispatch:
   schedule:
-    # 02:15 UTC = 07:45 IST: 90 minutes before NSE opens at 09:15 IST.
-    - cron: "15 2 * * 1-5"
+    # 02:45 UTC = 08:15 IST: exactly 1 hour before NSE opens at 09:15 IST.
+    - cron: "45 2 * * 1-5"
 
 permissions:
   contents: write
