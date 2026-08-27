@@ -14,6 +14,7 @@ from src.ledger import read_ledger, ledger_text, save_prediction
 from src.telegram_report import send_morning_predictions
 
 IST = ZoneInfo("Asia/Kolkata")
+UNIVERSE_VERSION = "NIFTY150"
 
 
 def run():
@@ -29,8 +30,7 @@ def run():
     raw = {}
     for symbol, df in raw_all.items():
         clean = df.loc[pd.to_datetime(df.index).date < today].copy()
-        if len(clean) >= 20:
-            raw[symbol] = clean
+        if len(clean) >= 20: raw[symbol] = clean
     nifty = nifty_all.loc[pd.to_datetime(nifty_all.index).date < today].copy()
     if len(raw) < 50 or nifty.empty:
         raise RuntimeError(f"Insufficient prior-session data: {len(raw)} stocks")
@@ -43,43 +43,38 @@ def run():
     ledger = read_ledger(PREDICTIONS_CSV.read_text(encoding="utf-8") if PREDICTIONS_CSV.exists() else "")
     existing_rows = ledger[ledger["target_date"].astype(str) == target].copy() if not ledger.empty else pd.DataFrame()
 
-    # Idempotent rerun: never regenerate an existing prediction. Instead resend the
-    # saved five predictions to Telegram so manual/scheduled retries remain useful.
-    if len(existing_rows) >= 5:
-        existing_rows = existing_rows.sort_values(["rank", "symbol"]).head(5)
-        telegram_rows = [
-            {"symbol": str(r["symbol"]), "score": float(r["score"]),
-             "open": float(r["pred_open"]), "high": float(r["pred_high"]),
-             "low": float(r["pred_low"]), "close": float(r["pred_close"])}
-            for _, r in existing_rows.iterrows()
-        ]
-        print(f"Prediction already exists for {target}; reusing saved Top 5 and resending Telegram.")
+    # A prediction is reusable only when it was generated from the current universe.
+    # This prevents an old NIFTY-50 prediction (e.g. Aug 27) from surviving the
+    # migration to NIFTY-150. The old target rows are removed and regenerated once.
+    current_rows = existing_rows[existing_rows["universe_version"].astype(str) == UNIVERSE_VERSION].copy() if not existing_rows.empty else pd.DataFrame()
+    if len(current_rows) >= 5:
+        current_rows = current_rows.sort_values(["rank", "symbol"]).head(5)
+        telegram_rows = [{"symbol":str(r["symbol"]),"score":float(r["score"]),"open":float(r["pred_open"]),"high":float(r["pred_high"]),"low":float(r["pred_low"]),"close":float(r["pred_close"])} for _,r in current_rows.iterrows()]
+        print(f"Prediction already exists for {target} under {UNIVERSE_VERSION}; reusing saved Top 5 and resending Telegram.")
         send_morning_predictions(target, telegram_rows)
         return
 
-    features = {s: add_features(df, nifty) for s, df in raw.items()}
-    fundamentals = {s: get_fundamentals(s) for s in raw}
-    top5 = rank_stocks(features, fundamentals).sort_values(["score", "symbol"], ascending=[False, True]).reset_index(drop=True).head(5)
+    if not existing_rows.empty:
+        print(f"Existing prediction for {target} was created under an older/different universe; replacing it with a fresh {UNIVERSE_VERSION} prediction.")
+        ledger = ledger[ledger["target_date"].astype(str) != target].copy()
 
+    features = {s:add_features(df,nifty) for s,df in raw.items()}
+    fundamentals = {s:get_fundamentals(s) for s in raw}
+    top5 = rank_stocks(features,fundamentals).sort_values(["score","symbol"],ascending=[False,True]).reset_index(drop=True).head(5)
     models = load_champion()
-    if models is None:
-        models = rolling_retrain(features)
+    if models is None: models = rolling_retrain(features)
 
-    telegram_rows = []
-    for rank, (_, row) in enumerate(top5.iterrows(), 1):
-        symbol = str(row["symbol"])
-        if symbol in set(existing_rows["symbol"].astype(str)) if not existing_rows.empty else False:
-            continue
-        p = predict_next(symbol, raw[symbol], features[symbol], models)
-        ledger = save_prediction(ledger, p, rank, float(row["score"]), target_date=target)
-        telegram_rows.append({"symbol": symbol, "score": float(row["score"]), "open": p["pred_open"], "high": p["pred_high"], "low": p["pred_low"], "close": p["pred_close"]})
+    telegram_rows=[]
+    for rank,(_,row) in enumerate(top5.iterrows(),1):
+        symbol=str(row["symbol"])
+        p=predict_next(symbol,raw[symbol],features[symbol],models)
+        ledger=save_prediction(ledger,p,rank,float(row["score"]),target_date=target,universe_version=UNIVERSE_VERSION)
+        telegram_rows.append({"symbol":symbol,"score":float(row["score"]),"open":p["pred_open"],"high":p["pred_high"],"low":p["pred_low"],"close":p["pred_close"]})
 
-    PREDICTIONS_CSV.write_text(ledger_text(ledger), encoding="utf-8")
-    print(f"Prediction date: {target}")
-    print(top5[["symbol", "score"]].to_string(index=False))
-    if telegram_rows:
-        send_morning_predictions(target, telegram_rows)
+    PREDICTIONS_CSV.write_text(ledger_text(ledger),encoding="utf-8")
+    print(f"Prediction date: {target} | Universe: {UNIVERSE_VERSION}")
+    print(top5[["symbol","score"]].to_string(index=False))
+    if telegram_rows: send_morning_predictions(target,telegram_rows)
 
 
-if __name__ == "__main__":
-    run()
+if __name__ == "__main__": run()
