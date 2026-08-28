@@ -1,0 +1,1 @@
+The automatic morning schedule is 02:45 UTC (08:15 IST). Scheduled runs are accepted only between 08:05 and 08:25 IST; delayed GitHub scheduled runs are skipped. Manual workflow_dispatch remains available.
