@@ -1,7 +1,7 @@
 import pickle
 import numpy as np
 import pandas as pd
-from xgboost import XGBRegressor
+from xgboost import XGBRegressor, XGBClassifier
 from config import RANDOM_STATE, MODEL_DIR
 
 STAGE1_FEATURES = [
@@ -15,11 +15,15 @@ STAGE1_FEATURES = [
     "nifty_ret_1d","nifty_ret_5d","nifty_ret_20d","nifty_volatility_10d",
     "nifty_trend","relative_ret_5d","relative_ret_20d","relative_vol_ratio"
 ]
+STAGE15_FEATURES = STAGE1_FEATURES + [
+    "market_breadth","market_return_1d","market_volatility_10d",
+    "regime_bull","regime_bear","regime_high_vol"
+]
 TARGETS = ["target_open", "target_high", "target_low", "target_close"]
 MODEL_PATH = MODEL_DIR / "champion.pkl"
 
 
-def build_training_frame(feature_sets, columns=STAGE1_FEATURES):
+def build_training_frame(feature_sets, columns=STAGE15_FEATURES):
     frames = []
     for symbol, df in feature_sets.items():
         x = df.dropna(subset=columns + TARGETS).copy()
@@ -32,11 +36,11 @@ def build_training_frame(feature_sets, columns=STAGE1_FEATURES):
     return pd.concat(frames, ignore_index=True).sort_values("date").reset_index(drop=True)
 
 
-def fit_model(data, columns=STAGE1_FEATURES):
+def fit_model(data, columns=STAGE15_FEATURES):
     return {
         target: XGBRegressor(
-            n_estimators=450, max_depth=3, learning_rate=0.025,
-            min_child_weight=3, reg_alpha=0.02, reg_lambda=1.2,
+            n_estimators=500, max_depth=3, learning_rate=0.02,
+            min_child_weight=4, reg_alpha=0.03, reg_lambda=1.3,
             subsample=0.85, colsample_bytree=0.85,
             objective="reg:squarederror", random_state=RANDOM_STATE, n_jobs=2
         ).fit(data[columns], data[target])
@@ -44,12 +48,55 @@ def fit_model(data, columns=STAGE1_FEATURES):
     }
 
 
-def _mae(models, data, columns=STAGE1_FEATURES):
+def fit_direction_model(data, columns=STAGE15_FEATURES):
+    y = (data["target_close"] > 0).astype(int)
+    if y.nunique() < 2:
+        return None
+    return XGBClassifier(
+        n_estimators=250, max_depth=2, learning_rate=0.03,
+        min_child_weight=4, reg_alpha=0.03, reg_lambda=1.2,
+        subsample=0.85, colsample_bytree=0.85,
+        eval_metric="logloss", random_state=RANDOM_STATE, n_jobs=2
+    ).fit(data[columns], y)
+
+
+def fit_bundle(data):
+    models = fit_model(data)
+    models["direction_model"] = fit_direction_model(data)
+    models["stage"] = "1.5"
+    models["feature_count"] = len(STAGE15_FEATURES)
+    return models
+
+
+def _mae(models, data, columns=STAGE15_FEATURES):
     vals = []
     for target in TARGETS:
         pred = models[target].predict(data[columns])
         vals.append(float(np.mean(np.abs(pred - data[target].to_numpy()))))
     return float(np.mean(vals))
+
+
+def _walk_forward_splits(data, folds=3):
+    n = len(data)
+    min_train = max(int(n * 0.55), 30)
+    test_size = max(int(n * 0.12), 10)
+    splits = []
+    for i in range(folds):
+        train_end = min_train + i * test_size
+        test_end = min(train_end + test_size, n)
+        if test_end > train_end and train_end < n:
+            splits.append((data.iloc[:train_end], data.iloc[train_end:test_end]))
+    return splits
+
+
+def _walk_forward_score(data):
+    scores = []
+    for train, valid in _walk_forward_splits(data):
+        challenger = fit_bundle(train)
+        scores.append(_mae(challenger, valid))
+    if not scores:
+        raise ValueError("Not enough rows for walk-forward validation")
+    return float(np.mean(scores))
 
 
 def load_champion():
@@ -60,10 +107,8 @@ def load_champion():
             model = pickle.load(f)
         if not isinstance(model, dict) or not all(t in model for t in TARGETS):
             return None
-        # Old Champion models use the previous 19-feature schema.
-        for target in TARGETS:
-            if model[target].get_booster().num_features() != len(STAGE1_FEATURES):
-                return None
+        if model.get("stage") != "1.5" or model.get("feature_count") != len(STAGE15_FEATURES):
+            return None
         return model
     except Exception:
         return None
@@ -76,22 +121,19 @@ def save_champion(models):
 
 
 def champion_challenger(feature_sets):
-    """Use a chronological newest-block holdout and replace Champion only when Challenger wins."""
+    """Compare Challenger and Champion with chronological walk-forward validation."""
     data = build_training_frame(feature_sets)
-    if len(data) < 30:
-        raise ValueError("Not enough Stage 1 rows for validation")
-    split = min(max(int(len(data) * 0.80), 1), len(data) - 1)
-    train, valid = data.iloc[:split], data.iloc[split:]
-    challenger = fit_model(train)
-    challenger_mae = _mae(challenger, valid)
+    if len(data) < 60:
+        raise ValueError("Not enough Stage 1.5 rows for validation")
 
+    challenger_mae = _walk_forward_score(data)
     champion = load_champion()
-    champion_mae = _mae(champion, valid) if champion is not None else None
+    champion_mae = _walk_forward_score(data) if champion is None else _mae(champion, data.iloc[-max(20, int(len(data)*0.2)):])
 
     if champion is None or challenger_mae < champion_mae:
-        final_model = fit_model(data)
+        final_model = fit_bundle(data)
         save_champion(final_model)
-        decision = "REPLACE CHAMPION" if champion is not None else "BOOTSTRAP STAGE1 CHAMPION"
+        decision = "REPLACE CHAMPION" if champion is not None else "BOOTSTRAP STAGE1.5 CHAMPION"
         return final_model, True, champion_mae, challenger_mae, decision
     return champion, False, champion_mae, challenger_mae, "KEEP CHAMPION"
 
