@@ -76,24 +76,18 @@ def _mae(models, data, columns=STAGE15_FEATURES):
     return float(np.mean(vals))
 
 
-def _walk_forward_splits(data, folds=3):
+def _walk_forward_score(data):
     n = len(data)
     min_train = max(int(n * 0.55), 30)
     test_size = max(int(n * 0.12), 10)
-    splits = []
-    for i in range(folds):
+    scores = []
+    for i in range(3):
         train_end = min_train + i * test_size
         test_end = min(train_end + test_size, n)
-        if test_end > train_end and train_end < n:
-            splits.append((data.iloc[:train_end], data.iloc[train_end:test_end]))
-    return splits
-
-
-def _walk_forward_score(data):
-    scores = []
-    for train, valid in _walk_forward_splits(data):
-        challenger = fit_bundle(train)
-        scores.append(_mae(challenger, valid))
+        if test_end <= train_end or train_end >= n:
+            continue
+        bundle = fit_bundle(data.iloc[:train_end])
+        scores.append(_mae(bundle, data.iloc[train_end:test_end]))
     if not scores:
         raise ValueError("Not enough rows for walk-forward validation")
     return float(np.mean(scores))
@@ -114,27 +108,50 @@ def load_champion():
         return None
 
 
-def save_champion(models):
+def save_champion(models, trained_through):
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    models["trained_through"] = str(pd.Timestamp(trained_through).date())
     with MODEL_PATH.open("wb") as f:
         pickle.dump(models, f)
 
 
 def champion_challenger(feature_sets):
-    """Compare Challenger and Champion with chronological walk-forward validation."""
+    """Stage 1.5 Champion/Challenger with strict chronological out-of-sample comparison."""
     data = build_training_frame(feature_sets)
     if len(data) < 60:
         raise ValueError("Not enough Stage 1.5 rows for validation")
 
-    challenger_mae = _walk_forward_score(data)
     champion = load_champion()
-    champion_mae = _walk_forward_score(data) if champion is None else _mae(champion, data.iloc[-max(20, int(len(data)*0.2)):])
-
-    if champion is None or challenger_mae < champion_mae:
+    if champion is None:
+        challenger_mae = _walk_forward_score(data)
         final_model = fit_bundle(data)
-        save_champion(final_model)
-        decision = "REPLACE CHAMPION" if champion is not None else "BOOTSTRAP STAGE1.5 CHAMPION"
-        return final_model, True, champion_mae, challenger_mae, decision
+        save_champion(final_model, data["date"].max())
+        return final_model, True, None, challenger_mae, "BOOTSTRAP STAGE1.5 CHAMPION"
+
+    trained_through = pd.to_datetime(champion.get("trained_through"), errors="coerce")
+    if pd.isna(trained_through):
+        # Old/unversioned Stage 1.5 snapshots are not safe for OOS comparison.
+        challenger_mae = _walk_forward_score(data)
+        final_model = fit_bundle(data)
+        save_champion(final_model, data["date"].max())
+        return final_model, True, None, challenger_mae, "RESET CHAMPION FOR OOS VALIDATION"
+
+    new_data = data[data["date"] > trained_through].copy()
+    if len(new_data) < 5:
+        return champion, False, None, None, "KEEP CHAMPION — NO NEW OOS BLOCK"
+
+    # Both models are judged on exactly the same unseen block.
+    prior = data[data["date"] <= trained_through].copy()
+    challenger = fit_bundle(prior)
+    challenger_mae = _mae(challenger, new_data)
+    champion_mae = _mae(champion, new_data)
+    walk_forward_mae = _walk_forward_score(data)
+    print(f"Stage 1.5 walk-forward MAE: {walk_forward_mae:.6f}")
+
+    if challenger_mae < champion_mae:
+        final_model = fit_bundle(data)
+        save_champion(final_model, data["date"].max())
+        return final_model, True, champion_mae, challenger_mae, "REPLACE CHAMPION"
     return champion, False, champion_mae, challenger_mae, "KEEP CHAMPION"
 
 
