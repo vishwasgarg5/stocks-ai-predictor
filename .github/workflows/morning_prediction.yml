@@ -3,8 +3,8 @@ name: NIFTY 150 Morning Prediction
 on:
   workflow_dispatch:
   schedule:
-    # 02:45 UTC = 08:15 IST. The script guard rejects delayed scheduled runs.
-    - cron: "45 2 * * 1-5"
+    # 23:30 UTC = 05:00 IST. Scheduled run is guarded against GitHub delays.
+    - cron: "30 23 * * 1-5"
 
 permissions:
   contents: write
@@ -30,7 +30,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Guarded morning prediction (08:05-08:25 IST only for schedule)
+      - name: Guarded morning prediction (05:00 IST target)
         run: python src/morning_runner.py
       - name: Commit prediction ledger and Nifty 150 cache
         run: |
