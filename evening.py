@@ -7,6 +7,7 @@ from config import PREDICTIONS_CSV
 from src.market_data import update_universe, update_nifty, get_nifty150_universe, fetch_exact_session
 from src.ledger import read_ledger, ledger_text, evaluate_pending, performance_report
 from src.features import add_features
+from src.stage15 import apply_stage15_context
 from src.retraining import champion_challenger
 from src.telegram_report import send_evening
 
@@ -22,10 +23,6 @@ def run():
         raise RuntimeError(f"Insufficient data: {len(raw)} usable stocks")
 
     ledger = read_ledger(PREDICTIONS_CSV.read_text(encoding="utf-8") if PREDICTIONS_CSV.exists() else "")
-
-    # IMPORTANT: use a fresh exact-date fetch for every pending prediction. Cached OHLCV
-    # remains the incremental 3-month store, but it must never be trusted as the actual
-    # when evaluating a historical target session if it may be stale.
     actuals = {}
     pending = ledger[ledger["actual_close"].isna()].copy() if not ledger.empty else pd.DataFrame()
     for _, r in pending.iterrows():
@@ -36,9 +33,6 @@ def run():
         actual = fetch_exact_session(symbol, target.strftime("%Y-%m-%d"))
         if actual is not None:
             actuals.setdefault(symbol, {})[target.strftime("%Y-%m-%d")] = actual
-            print(f"Exact actual confirmed: {symbol} {target.strftime('%Y-%m-%d')} close={actual['close']:.2f}")
-        else:
-            print(f"Actual not yet available: {symbol} {target.strftime('%Y-%m-%d')}")
 
     ledger, evaluated = evaluate_pending(ledger, actuals)
     retrained = False
@@ -46,6 +40,7 @@ def run():
     decision = "NO EVALUATION"
     if evaluated:
         features = {s: add_features(df, nifty) for s, df in raw.items()}
+        features = apply_stage15_context(features, raw)
         _, retrained, champion_mae, challenger_mae, decision = champion_challenger(features)
 
     PREDICTIONS_CSV.write_text(ledger_text(ledger), encoding="utf-8")
@@ -53,11 +48,8 @@ def run():
     if not report.empty:
         report.to_csv("reports/performance.csv", index=False)
 
-    evaluated_dates = ledger.loc[
-        ledger["actual_close"].notna(), "target_date"
-    ].astype(str) if not ledger.empty else pd.Series(dtype=str)
+    evaluated_dates = ledger.loc[ledger["actual_close"].notna(), "target_date"].astype(str) if not ledger.empty else pd.Series(dtype=str)
     session_date = max(evaluated_dates) if evaluated_dates.size else datetime.now(IST).date().isoformat()
-
     print(f"Market/evaluation session: {session_date}")
     print(f"Predictions evaluated this run: {evaluated}")
     print(f"Model retrained: {'YES' if retrained else 'NO'}")
@@ -65,8 +57,6 @@ def run():
     if champion_mae is not None:
         print(f"Champion validation MAE: {champion_mae:.6f}")
         print(f"Challenger validation MAE: {challenger_mae:.6f}")
-    if not report.empty:
-        print(report.to_string(index=False))
     send_evening(session_date, evaluated, ledger, report, retrained, champion_mae, challenger_mae)
 
 
