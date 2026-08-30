@@ -2,10 +2,11 @@ import io
 from datetime import datetime, timezone
 import pandas as pd
 
-COLUMNS = ["created_at","target_date","universe_version","symbol","rank","score","base_close","pred_open","pred_high","pred_low","pred_close","actual_open","actual_high","actual_low","actual_close","open_error","high_error","low_error","close_error","direction_correct"]
+COLUMNS = ["created_at","target_date","universe_version","symbol","rank","score","base_close","pred_open","pred_high","pred_low","pred_close","predicted_direction","confidence","regime","expected_return_pct","actual_open","actual_high","actual_low","actual_close","open_error","high_error","low_error","close_error","direction_correct"]
 
 def read_ledger(text: str = "") -> pd.DataFrame:
-    if not text: return pd.DataFrame(columns=COLUMNS)
+    if not text:
+        return pd.DataFrame(columns=COLUMNS)
     df = pd.read_csv(io.StringIO(text))
     for c in COLUMNS:
         if c not in df.columns: df[c] = pd.NA
@@ -16,7 +17,7 @@ def ledger_text(df): return df.reindex(columns=COLUMNS).to_csv(index=False)
 def save_prediction(ledger, p, rank, score, target_date=None, universe_version="NIFTY150"):
     target_date = target_date or p.get("target_date")
     row = {c: None for c in COLUMNS}
-    row.update({"created_at":datetime.now(timezone.utc).isoformat(),"target_date":target_date,"universe_version":universe_version,"symbol":p["symbol"],"rank":rank,"score":score,"base_close":p["base_close"],"pred_open":p["pred_open"],"pred_high":p["pred_high"],"pred_low":p["pred_low"],"pred_close":p["pred_close"]})
+    row.update({"created_at":datetime.now(timezone.utc).isoformat(),"target_date":target_date,"universe_version":universe_version,"symbol":p["symbol"],"rank":rank,"score":score,"base_close":p["base_close"],"pred_open":p["pred_open"],"pred_high":p["pred_high"],"pred_low":p["pred_low"],"pred_close":p["pred_close"],"predicted_direction":p.get("predicted_direction"),"confidence":p.get("confidence"),"regime":p.get("regime"),"expected_return_pct":p.get("expected_return_pct")})
     mask=(ledger.symbol.astype(str)==str(p["symbol"]))&(ledger.target_date.astype(str)==str(target_date))&(ledger.universe_version.astype(str)==str(universe_version))
     if mask.any(): return ledger
     return pd.concat([ledger,pd.DataFrame([row])],ignore_index=True)
