@@ -1,4 +1,4 @@
-name: Stage 2 Weekly Report
+name: Stage 4 Weekly Report
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: stage2-weekly
+  group: stage4-weekly
   cancel-in-progress: false
 
 permissions:
@@ -32,7 +32,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate weekly report
+      # STAGE 4: weekly report monitors the new sector-aware selection metrics.
+      - name: Generate Stage 4 weekly report
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
