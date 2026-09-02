@@ -1,8 +1,15 @@
+"""
+STAGE 4 TELEGRAM REPORT
+=======================
+Easy access: this file controls the morning/evening Telegram layout.
+Morning now reports price bucket + sector intelligence alongside the
+existing Stage 2 prediction, jump and intraday tables.
+"""
 import os
 import requests
 import pandas as pd
 
-from .config import TELEGRAM_MAX_LENGTH
+from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION
 from .utils import format_money, format_percent, split_messages
 from .selection import expected_return_score, regime_direction_score
 
@@ -13,7 +20,6 @@ def send_telegram(text):
     if not token or not chat_id:
         print("Telegram secrets not configured.")
         return False
-
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     success = True
     for message in split_messages(text, TELEGRAM_MAX_LENGTH):
@@ -48,21 +54,19 @@ def _evaluation_components(row, regime):
         "Direction": float(row.get("Direction_Confidence", 50)),
         "Reliability": float(row.get("ReliabilityScore", 50)),
         "Regime": regime_direction_score(row.get("Direction", "NEUTRAL"), regime),
+        "Sector": float(row.get("SectorScore", 50)),
     }
 
 
 def morning_report(prediction_date, cutoff_date, schedule_status, regime, model_variant, selected, jump_watchlist, intraday, universe_count=None, liquid_count=None, prescreen_count=None):
     lines = [
-        "📈 AI NSE STOCK PREDICTION — STAGE 2",
+        "📈 AI NSE STOCK PREDICTION — STAGE 4",
         "```",
         _table(["Market Info", "Value"], [
             ["Prediction Date", prediction_date], ["Data Cutoff", cutoff_date], ["Schedule", schedule_status],
-            ["Market Regime", regime], ["Model", model_variant], ["Model Version", "Stage 2 v2.1"],
+            ["Market Regime", regime], ["Model", model_variant], ["Model Version", MODEL_VERSION],
         ]),
-        "```",
-        "",
-        "🔎 SCAN SUMMARY",
-        "```",
+        "```", "", "🔎 SCAN SUMMARY", "```",
         _table(["Stage", "Stocks"], [
             ["Universe Loaded", universe_count if universe_count is not None else "-"],
             ["Liquid Universe", liquid_count if liquid_count is not None else "-"],
@@ -71,23 +75,35 @@ def morning_report(prediction_date, cutoff_date, schedule_status, regime, model_
             ["Jump Watch Candidates", 30 if jump_watchlist is not None and not jump_watchlist.empty else 0],
             ["Intraday Scan", liquid_count if liquid_count is not None else "-"],
         ]),
-        "```",
-        "",
-        "🎯 NEXT-DAY TOP 5",
+        "```", "", "🎯 NEXT-DAY TOP 5"
     ]
 
     if selected is not None and not selected.empty:
         rows = []
         for i, (_, row) in enumerate(selected.iterrows(), 1):
-            rows.append([i, row["Symbol"], f"{row['Score']:.1f}", row["Direction"], f"{row['Direction_Confidence']:.0f}%", f"{row['Expected_Return']:+.2f}%", f"{row['Pred_Open']:.2f}", f"{row['Pred_High']:.2f}", f"{row['Pred_Low']:.2f}", f"{row['Pred_Close']:.2f}"])
-        lines += ["```", _table(["#", "Stock", "Score", "Dir", "Conf", "Exp%", "Open", "High", "Low", "Close"], rows), "```"]
+            rows.append([
+                i, row["Symbol"], row.get("PriceBucket", "-"), row.get("Sector", "-"),
+                f"{row['Score']:.1f}", row["Direction"], f"{row['Direction_Confidence']:.0f}%",
+                f"{row['Expected_Return']:+.2f}%", f"{row['Pred_Close']:.2f}"
+            ])
+        lines += ["```", _table(["#", "Stock", "Bucket", "Sector", "Score", "Dir", "Conf", "Exp%", "Close"], rows), "```"]
 
-        lines += ["", "🧠 TOP 5 EVALUATION", "```"]
+        lines += ["", "📊 PREDICTED OHLC", "```"]
+        ohlc_rows = []
+        for _, row in selected.iterrows():
+            ohlc_rows.append([row["Symbol"], f"{row['Pred_Open']:.2f}", f"{row['Pred_High']:.2f}", f"{row['Pred_Low']:.2f}", f"{row['Pred_Close']:.2f}"])
+        lines += [_table(["Stock", "Open", "High", "Low", "Close"], ohlc_rows), "```", "", "🧠 TOP 5 EVALUATION", "```"]
         component_rows = []
         for _, row in selected.iterrows():
             c = _evaluation_components(row, regime)
-            component_rows.append([row["Symbol"], f"{c['Technical']:.0f}", f"{c['Expected Return']:.0f}", f"{c['Model Confidence']:.0f}", f"{c['Direction']:.0f}", f"{c['Reliability']:.0f}", f"{c['Regime']:.0f}", f"{row['Score']:.1f}"])
-        lines += [_table(["Stock", "Tech", "ExpRet", "Model", "Dir", "Reliab", "Regime", "Final"], component_rows), "```", "", "⚖️ SELECTION WEIGHTS", "```", _table(["Component", "Weight"], [["Technical Score", "25%"], ["Expected Return", "20%"], ["Model Confidence", "20%"], ["Direction Confidence", "15%"], ["Reliability", "10%"], ["Market Regime", "10%"]]), "```"]
+            component_rows.append([
+                row["Symbol"], f"{c['Technical']:.0f}", f"{c['Expected Return']:.0f}",
+                f"{c['Model Confidence']:.0f}", f"{c['Direction']:.0f}", f"{c['Reliability']:.0f}",
+                f"{c['Regime']:.0f}", f"{c['Sector']:.0f}", f"{row['Score']:.1f}"
+            ])
+        lines += [_table(["Stock", "Tech", "ExpRet", "Model", "Dir", "Reliab", "Regime", "Sector", "Final"], component_rows), "```", "", "⚖️ SELECTION WEIGHTS", "```", _table(["Component", "Weight"], [["Technical Score", "20%"], ["Expected Return", "18%"], ["Model Confidence", "18%"], ["Direction Confidence", "14%"], ["Reliability", "10%"], ["Market Regime", "10%"], ["Sector Strength", "10%"]]), "```"]
+
+        lines += ["", "🏷️ PRICE BUCKETS", "```", _table(["Bucket", "Price"], [["B1", "> ₹1,000"], ["B2", "₹500–₹999"], ["B3", "₹100–₹499"], ["B4", "₹50–₹99"], ["B5", "₹10–₹49"]]), "```"]
     else:
         lines.append("No next-day predictions generated.")
 
@@ -111,12 +127,11 @@ def morning_report(prediction_date, cutoff_date, schedule_status, regime, model_
         lines += ["```", _table(["#", "Stock", "Bias", "CMP", "Target", "SL", "Conf"], rows), "```"]
     else:
         lines.append("No strong intraday setup today.")
-
     return "\n".join(lines)
 
 
 def evening_report(market_date, evaluation, metrics, retraining):
-    lines = ["🌙 AI NSE EVENING REPORT — STAGE 2", "```", _table(["Report", "Value"], [["Market Date", market_date], ["Evaluated Stocks", len(evaluation) if evaluation is not None else 0]]), "```", "", "📊 PREDICTED vs ACTUAL OHLC"]
+    lines = ["🌙 AI NSE EVENING REPORT — STAGE 4", "```", _table(["Report", "Value"], [["Market Date", market_date], ["Evaluated Stocks", len(evaluation) if evaluation is not None else 0], ["Model Version", MODEL_VERSION]]), "```", "", "📊 PREDICTED vs ACTUAL OHLC"]
     if evaluation is not None and not evaluation.empty:
         rows = []
         direction_rows = []
@@ -126,6 +141,5 @@ def evening_report(market_date, evaluation, metrics, retraining):
         lines += ["```", _table(["Stock", "Type", "Open", "High", "Low", "Close"], rows), "```", "", "🧭 DIRECTION CHECK", "```", _table(["Stock", "Pred → Actual", "Correct"], direction_rows), "```"]
     else:
         lines.append("No predictions available for evaluation.")
-
     lines += ["", "📈 MODEL ACCURACY", "```", _table(["Metric", "Value"], [["Samples", metrics.get("Samples", 0)], ["Open MAPE", f"{metrics.get('OpenMAPE', 0):.3f}%"], ["High MAPE", f"{metrics.get('HighMAPE', 0):.3f}%"], ["Low MAPE", f"{metrics.get('LowMAPE', 0):.3f}%"], ["Close MAPE", f"{metrics.get('CloseMAPE', 0):.3f}%"], ["Overall MAPE", f"{metrics.get('OverallMAPE', 0):.3f}%"], ["Direction Accuracy", f"{metrics.get('DirectionAccuracy', 0):.1f}%"]]), "```", "", "🏆 CHAMPION / CHALLENGER", "```", _table(["Metric", "Value"], [["Decision", retraining.get("Decision", "-")], ["Champion Error", f"{retraining.get('ChampionError', 0):.6f}"], ["Challenger Error", f"{retraining.get('ChallengerError', 0):.6f}"], ["Improvement", f"{retraining.get('Improvement', 0):+.2f}%"], ["Model Replaced", "YES" if retraining.get("Retrained") else "NO"]]), "```"]
     return "\n".join(lines)
