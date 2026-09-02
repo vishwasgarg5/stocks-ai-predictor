@@ -2,7 +2,7 @@
 STAGE 4 FINAL STOCK SELECTION
 ==============================
 Easy access: this file contains the final ranking weights.
-Stage 4 adds Sector Score while retaining the Stage 2 ML confidence,
+Stage 4 adds Sector Score while retaining Stage 2 ML confidence,
 reliability and market-regime logic. Price-bucket filtering is performed
 before final Top-5 selection by morning_runner.py.
 """
@@ -65,14 +65,20 @@ def calculate_score(row, regime):
     )
 
 
-def select_top_stocks(candidates, top_n=5, regime="SIDEWAYS"):
-    """Rank candidates and return the strongest final Top-N stocks."""
+def score_candidates(candidates, regime="SIDEWAYS"):
+    """Score every candidate without truncating; used by Stage 4 bucket selection."""
     if candidates is None or candidates.empty:
         return pd.DataFrame()
     df = candidates.copy()
-    df["ReliabilityScore"] = df["Symbol"].map(load_reliability()).fillna(50.0)
+    reliability = load_reliability()
+    df["ReliabilityScore"] = df["Symbol"].map(reliability).fillna(50.0)
     df["Score"] = df.apply(lambda r: calculate_score(r, regime), axis=1)
     return df.sort_values(
         ["Score", "Confidence", "Direction_Confidence", "SectorScore"],
         ascending=False,
-    ).head(top_n).reset_index(drop=True)
+    ).reset_index(drop=True)
+
+
+def select_top_stocks(candidates, top_n=5, regime="SIDEWAYS"):
+    """Rank candidates and return the strongest final Top-N stocks."""
+    return score_candidates(candidates, regime).head(top_n).reset_index(drop=True)
