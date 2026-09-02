@@ -1,42 +1,61 @@
-name: NIFTY 150 Morning Prediction
+name: Stage 2 Morning Prediction
 
 on:
-  workflow_dispatch:
   schedule:
-    # 23:30 UTC = 05:00 IST. Scheduled run is guarded against GitHub delays.
-    - cron: "30 23 * * 1-5"
+    - cron: "0 5 * * 1-5"
+      timezone: "Asia/Kolkata"
+
+  workflow_dispatch:
+
+concurrency:
+  group: stage2-morning
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
-concurrency:
-  group: nifty150-daily-pipeline
-  cancel-in-progress: false
-
-env:
-  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
 jobs:
-  predict:
+  prediction:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-      - run: pip install -r requirements.txt
-      - name: Guarded morning prediction (05:00 IST target)
-        run: python src/morning_runner.py
-      - name: Commit prediction ledger and Nifty 150 cache
+
+      - name: Install dependencies
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data reports
-          if git diff --cached --quiet; then echo "No morning prediction changes."; exit 0; fi
-          git commit -m "chore: save morning NIFTY 150 prediction"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Stage 2 morning engine
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python -m src.morning_runner
+
+      - name: Commit Stage 2 data
+        run: |
+          git config user.name "stocks-ai-predictor"
+          git config user.email "actions@github.com"
+
+          git add data/stage2/
+
+          if git diff --cached --quiet; then
+            echo "No Stage 2 data changes."
+            exit 0
+          fi
+
+          git commit -m "Stage 2 morning prediction"
+
+          git pull --rebase origin main || true
+
           git push
