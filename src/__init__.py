@@ -1,6 +1,1 @@
-"""
-AI NSE Stock Predictor — Stage 4
-
-Stage 4 adds price-bucket selection and market/sector intelligence
-around the existing Stage 2 production prediction engines.
-"""
+"""Stocks AI Predictor — Stage 4 (Stage 3A + 3B + Stage 4 combined)."""
