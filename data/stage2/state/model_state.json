@@ -1,0 +1,15 @@
+{
+  "active_variant": "A",
+  "last_champion_error": 0.028034986696794228,
+  "last_challenger_error": 0.0284764607481875,
+  "last_improvement": -1.5747253821374363,
+  "last_decision": "CHAMPION KEPT",
+  "processed_stocks": [
+    "POLICYBZR",
+    "DIVISLAB",
+    "BPCL",
+    "JINDALSTEL",
+    "UNIONBANK"
+  ],
+  "cutoff_date": "2026-09-01"
+}
