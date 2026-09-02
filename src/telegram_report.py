@@ -19,7 +19,11 @@ def send_telegram(text):
         try:
             response = requests.post(
                 url,
-                json={"chat_id": chat_id, "text": message},
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "Markdown",
+                },
                 timeout=20,
             )
             if response.status_code != 200:
@@ -32,11 +36,14 @@ def send_telegram(text):
 
 
 def _table(headers, rows):
-    """Create a Telegram-safe monospace table without requiring Markdown parsing."""
+    """Create a compact aligned table for Telegram's monospace code blocks."""
     all_rows = [headers] + [[str(x) for x in row] for row in rows]
     widths = [max(len(row[i]) for row in all_rows) for i in range(len(headers))]
     separator = "  ".join("-" * width for width in widths)
-    body = ["  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))) for row in all_rows]
+    body = [
+        "  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers)))
+        for row in all_rows
+    ]
     return "\n".join([body[0], separator] + body[1:])
 
 
@@ -77,7 +84,10 @@ def morning_report(
             ])
         lines += [
             "```",
-            _table(["#", "Stock", "Score", "Dir", "Conf", "Open", "High", "Low", "Close"], rows),
+            _table(
+                ["#", "Stock", "Score", "Dir", "Conf", "Open", "High", "Low", "Close"],
+                rows,
+            ),
             "```",
         ]
     else:
@@ -155,7 +165,10 @@ def evening_report(market_date, evaluation, metrics, retraining):
             "Direction: ✅ = correct, ❌ = incorrect",
         ]
         for _, row in evaluation.iterrows():
-            lines.append(f"{row['Symbol']}: {row['Pred_Direction']} → {row['Actual_Direction']} {'✅' if row['DirectionCorrect'] else '❌'}")
+            lines.append(
+                f"{row['Symbol']}: {row['Pred_Direction']} → {row['Actual_Direction']} "
+                f"{'✅' if row['DirectionCorrect'] else '❌'}"
+            )
     else:
         lines.append("No predictions available for evaluation.")
 
