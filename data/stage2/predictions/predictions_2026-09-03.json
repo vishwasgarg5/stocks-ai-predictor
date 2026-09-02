@@ -1,0 +1,29 @@
+{
+  "Stage": "Stage 4",
+  "PredictionDate": "2026-09-03",
+  "DataCutoff": "2026-09-01",
+  "ModelVariant": "A",
+  "ModelVersion": "stage4-v4.1",
+  "Regime": "SIDEWAYS",
+  "PriceBuckets": [
+    ">1000",
+    "500-999",
+    "100-499",
+    "50-99",
+    "10-49"
+  ],
+  "MultiHorizons": [
+    1,
+    3,
+    5,
+    7,
+    20
+  ],
+  "SelectedStocks": [
+    "DIVISLAB",
+    "BIRLACABLE",
+    "EBGNG",
+    "DWARKESH",
+    "HFCL"
+  ]
+}
