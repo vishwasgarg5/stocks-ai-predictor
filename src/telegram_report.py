@@ -1,70 +1,243 @@
-"""Telegram notifications with compact table-first reports."""
 import os
 import requests
+import pandas as pd
+
+from .config import TELEGRAM_MAX_LENGTH
+from .utils import (
+    format_money,
+    format_percent,
+    split_messages,
+)
 
 
-def _send(text: str) -> bool:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+def send_telegram(text):
+    token = os.getenv(
+        "TELEGRAM_BOT_TOKEN"
+    )
+
+    chat_id = os.getenv(
+        "TELEGRAM_CHAT_ID"
+    )
+
     if not token or not chat_id:
-        print("Telegram credentials not configured; skipping Telegram notification.")
-        return False
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=20)
-        r.raise_for_status()
-        if not r.json().get("ok"):
-            print(f"Telegram API rejected message: {r.json()}")
-            return False
-        print("Telegram sent successfully")
-        return True
-    except Exception as exc:
-        print(f"Telegram send failed: {exc}")
+        print(
+            "Telegram secrets not configured."
+        )
         return False
 
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{token}/sendMessage"
+    )
 
-def send_morning_predictions(prediction_date: str, rows):
-    lines = ["<b>📈 AI NSE STOCK PREDICTION — STAGE 1.5</b>", f"Prediction Date: <b>{prediction_date}</b>", "", "<pre>RK STOCK        SCORE   OPEN     HIGH      LOW    CLOSE  DIR CONF  REGIME\n--------------------------------------------------------------------------"]
-    for rank, row in enumerate(rows, 1):
-        conf = float(row.get("confidence", 0.5)) * 100
-        lines.append(f"{rank:>2} {row['symbol']:<11} {row['score']:>6.1f} {row['open']:>8.2f} {row['high']:>8.2f} {row['low']:>8.2f} {row['close']:>8.2f} {row.get('direction','NA')[:4]:>4} {conf:>5.1f}% {row.get('regime','NA')[:8]:>8}")
-    lines += ["</pre>", "Model: Stage 1.5 | Data cutoff: prior completed session"]
-    return _send("\n".join(lines))
+    success = True
+
+    for message in split_messages(
+        text,
+        TELEGRAM_MAX_LENGTH,
+    ):
+        try:
+            response = requests.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                },
+                timeout=20,
+            )
+
+            if response.status_code != 200:
+                print(
+                    "Telegram error:",
+                    response.text,
+                )
+                success = False
+
+        except Exception as exc:
+            print(
+                "Telegram exception:",
+                exc,
+            )
+            success = False
+
+    return success
 
 
-def _err_pct(pred, actual):
-    if actual is None or pred is None or actual == 0:
-        return None
-    return (actual - pred) / actual * 100.0
+def morning_report(
+    prediction_date,
+    cutoff_date,
+    schedule_status,
+    regime,
+    model_variant,
+    selected,
+    jump_watchlist,
+    intraday,
+):
+    lines = [
+        "📈 AI NSE STOCK PREDICTION — STAGE 2",
+        f"Prediction Date: {prediction_date}",
+        f"Data Cutoff: {cutoff_date}",
+        f"Schedule: {schedule_status}",
+        f"Market Regime: {regime}",
+        f"Champion Model: {model_variant}",
+        "",
+        "🎯 NEXT-DAY TOP 5",
+        "",
+    ]
 
+    for i, (_, row) in enumerate(
+        selected.iterrows(),
+        1,
+    ):
+        lines.extend(
+            [
+                (
+                    f"{i}. {row['Symbol']} | "
+                    f"Score {row['Score']:.1f} | "
+                    f"{row['Direction']} "
+                    f"{row['Direction_Confidence']:.0f}%"
+                ),
+                (
+                    f"   O {row['Pred_Open']:.2f} "
+                    f"H {row['Pred_High']:.2f} "
+                    f"L {row['Pred_Low']:.2f} "
+                    f"C {row['Pred_Close']:.2f}"
+                ),
+            ]
+        )
 
-def send_evening(session_date, evaluated, ledger, report, retrained=False, champion_mae=None, challenger_mae=None):
-    lines = ["<b>🌙 AI NSE EVENING REPORT — STAGE 1.5</b>", f"Market Date: <b>{session_date}</b>", f"Predictions Evaluated: <b>{evaluated}</b>", ""]
-    if ledger is not None and evaluated:
-        done = ledger[(ledger["actual_close"].notna()) & (ledger["target_date"].astype(str) == session_date)].sort_values(["rank", "symbol"]).head(5)
-        lines.append("<pre>STOCK       TYPE       OPEN      HIGH       LOW     CLOSE")
-        for _, r in done.iterrows():
-            lines.append(f"{r['symbol']:<10} PRED   {r['pred_open']:>9.2f} {r['pred_high']:>9.2f} {r['pred_low']:>9.2f} {r['pred_close']:>9.2f}")
-            lines.append(f"{'':<10} ACT    {r['actual_open']:>9.2f} {r['actual_high']:>9.2f} {r['actual_low']:>9.2f} {r['actual_close']:>9.2f}")
-            lines.append(f"{'':<10} DIFF   {r['actual_open']-r['pred_open']:>+9.2f} {r['actual_high']-r['pred_high']:>+9.2f} {r['actual_low']-r['pred_low']:>+9.2f} {r['actual_close']-r['pred_close']:>+9.2f}")
-        lines.append("</pre>")
-    if report is not None and not report.empty:
-        r = report.iloc[0]
-        lines.append("<pre>MODEL ACCURACY\n-----------------------------")
-        lines.append(f"Samples             {int(r['predictions'])}")
-        lines.append(f"Open MAPE           {r['open_mape']*100:.3f}%")
-        lines.append(f"High MAPE           {r['high_mape']*100:.3f}%")
-        lines.append(f"Low MAPE            {r['low_mape']*100:.3f}%")
-        lines.append(f"Close MAPE          {r['close_mape']*100:.3f}%")
-        lines.append(f"Overall OHLC MAPE   {r['ohlc_mape']*100:.3f}%")
-        lines.append(f"Direction Accuracy  {r['direction_accuracy']*100:.1f}%")
-        lines.append("</pre>")
-    if evaluated:
-        if champion_mae is None:
-            lines.append("<b>Champion: Stage 1.5 bootstrap</b>")
-        else:
-            lines.append(f"<b>Champion Decision: {'REPLACED' if retrained else 'KEPT'}</b>")
-            if challenger_mae is not None:
-                lines.append(f"Validation MAE — Champion: {champion_mae:.6f} | Challenger: {challenger_mae:.6f}")
+    lines.extend(
+        [
+            "",
+            "🔥 7-DAY +5% JUMP WATCHLIST",
+            "",
+        ]
+    )
+
+    if jump_watchlist is not None and not jump_watchlist.empty:
+        for i, (_, row) in enumerate(
+            jump_watchlist.iterrows(),
+            1,
+        ):
+            lines.append(
+                (
+                    f"{i}. {row['Symbol']} | "
+                    f"CMP {format_money(row['Current_Price'])} | "
+                    f"Target {format_money(row['Target_Level'])} | "
+                    f"Potential {format_percent(row['Estimated_7D_Upside'])} | "
+                    f"Prob {row['Jump_Probability']:.0f}%"
+                )
+            )
     else:
-        lines.append("<b>No new target-session actuals — no retraining</b>")
-    return _send("\n".join(lines))
+        lines.append(
+            "No strong +5% candidates today."
+        )
+
+    lines.extend(
+        [
+            "",
+            "⚡ INTRADAY TOP 5",
+            "",
+        ]
+    )
+
+    if intraday is not None and not intraday.empty:
+        for i, (_, row) in enumerate(
+            intraday.iterrows(),
+            1,
+        ):
+            lines.append(
+                (
+                    f"{i}. {row['Symbol']} | "
+                    f"{row['Bias']} | "
+                    f"CMP {format_money(row['Current'])} | "
+                    f"Target {format_money(row['Target'])} | "
+                    f"SL {format_money(row['StopLoss'])} | "
+                    f"Conf {row['Confidence']:.0f}%"
+                )
+            )
+    else:
+        lines.append(
+            "No strong intraday setup today."
+        )
+
+    lines.extend(
+        [
+            "",
+            "Stage 2 stores all prediction data "
+            "for future learning."
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def evening_report(
+    market_date,
+    evaluation,
+    metrics,
+    retraining,
+):
+    lines = [
+        "🌙 AI NSE EVENING REPORT — STAGE 2",
+        f"Market Date: {market_date}",
+        "",
+        "NEXT-DAY PREDICTION EVALUATION",
+        "",
+    ]
+
+    for _, row in evaluation.iterrows():
+        lines.extend(
+            [
+                (
+                    f"{row['Symbol']}"
+                ),
+                (
+                    f"PRED O {row['Pred_Open']:.2f} "
+                    f"H {row['Pred_High']:.2f} "
+                    f"L {row['Pred_Low']:.2f} "
+                    f"C {row['Pred_Close']:.2f}"
+                ),
+                (
+                    f"ACT  O {row['Actual_Open']:.2f} "
+                    f"H {row['Actual_High']:.2f} "
+                    f"L {row['Actual_Low']:.2f} "
+                    f"C {row['Actual_Close']:.2f}"
+                ),
+                (
+                    f"DIFF O {row['Diff_Open']:+.2f} "
+                    f"H {row['Diff_High']:+.2f} "
+                    f"L {row['Diff_Low']:+.2f} "
+                    f"C {row['Diff_Close']:+.2f}"
+                ),
+                (
+                    f"Direction: "
+                    f"{row['Pred_Direction']} → "
+                    f"{row['Actual_Direction']} "
+                    f"{'✅' if row['DirectionCorrect'] else '❌'}"
+                ),
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "📊 MODEL ACCURACY",
+            f"Samples: {metrics['Samples']}",
+            f"Open MAPE: {metrics['OpenMAPE']:.3f}%",
+            f"High MAPE: {metrics['HighMAPE']:.3f}%",
+            f"Low MAPE: {metrics['LowMAPE']:.3f}%",
+            f"Close MAPE: {metrics['CloseMAPE']:.3f}%",
+            f"Overall MAPE: {metrics['OverallMAPE']:.3f}%",
+            f"Direction Accuracy: {metrics['DirectionAccuracy']:.1f}%",
+            "",
+            "🏆 CHAMPION / CHALLENGER",
+            f"Decision: {retraining.get('Decision', '-')}",
+            f"Champion Error: {retraining.get('ChampionError', 0):.6f}",
+            f"Challenger Error: {retraining.get('ChallengerError', 0):.6f}",
+            f"Improvement: {retraining.get('Improvement', 0):+.2f}%",
+            f"Model Replaced: {'YES' if retraining.get('Retrained') else 'NO'}",
+        ]
+    )
+
+    return "\n".join(lines)
