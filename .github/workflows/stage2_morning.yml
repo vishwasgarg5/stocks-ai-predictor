@@ -1,4 +1,4 @@
-name: Stage 2 Morning Prediction
+name: Stage 4 Morning Prediction
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: stage2-morning
+  group: stage4-morning
   cancel-in-progress: false
 
 permissions:
@@ -34,7 +34,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Stage 2 morning engine
+      # STAGE 4: price buckets + sector intelligence are integrated inside
+      # src/morning_runner.py. The existing Stage 2 prediction engines remain.
+      - name: Run Stage 4 morning engine
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -42,15 +44,15 @@ jobs:
         run: |
           python -m src.morning_runner
 
-      - name: Commit Stage 2 data
+      - name: Commit Stage 4 data
         run: |
           git config user.name "stocks-ai-predictor"
           git config user.email "actions@github.com"
           git add data/stage2/
           if git diff --cached --quiet; then
-            echo "No Stage 2 data changes."
+            echo "No Stage 4 data changes."
             exit 0
           fi
-          git commit -m "Stage 2 morning prediction"
+          git commit -m "Stage 4 morning prediction"
           git pull --rebase origin main || true
           git push
