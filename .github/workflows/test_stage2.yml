@@ -52,6 +52,9 @@ jobs:
           echo "Repository contents:"
           ls -la
 
+          echo "Source directory:"
+          ls -la src
+
           echo "Tests directory:"
           ls -la tests
 
