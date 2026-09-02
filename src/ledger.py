@@ -1,43 +1,350 @@
-import io
-from datetime import datetime, timezone
+from pathlib import Path
+import re
+
 import pandas as pd
 
-COLUMNS = ["created_at","target_date","universe_version","symbol","rank","score","base_close","pred_open","pred_high","pred_low","pred_close","predicted_direction","confidence","regime","expected_return_pct","actual_open","actual_high","actual_low","actual_close","open_error","high_error","low_error","close_error","direction_correct"]
+from .config import (
+    PREDICTIONS_DIR,
+    EVALUATIONS_DIR,
+    JUMP_DIR,
+    INTRADAY_DIR,
+    DAILY_METRICS_FILE,
+    STOCK_RELIABILITY_FILE,
+    JUMP_METRICS_FILE,
+    INTRADAY_METRICS_FILE,
+)
 
-def read_ledger(text: str = "") -> pd.DataFrame:
-    if not text:
-        return pd.DataFrame(columns=COLUMNS)
-    df = pd.read_csv(io.StringIO(text))
-    for c in COLUMNS:
-        if c not in df.columns: df[c] = pd.NA
-    return df.reindex(columns=COLUMNS)
+from .utils import write_json
 
-def ledger_text(df): return df.reindex(columns=COLUMNS).to_csv(index=False)
 
-def save_prediction(ledger, p, rank, score, target_date=None, universe_version="NIFTY150"):
-    target_date = target_date or p.get("target_date")
-    row = {c: None for c in COLUMNS}
-    row.update({"created_at":datetime.now(timezone.utc).isoformat(),"target_date":target_date,"universe_version":universe_version,"symbol":p["symbol"],"rank":rank,"score":score,"base_close":p["base_close"],"pred_open":p["pred_open"],"pred_high":p["pred_high"],"pred_low":p["pred_low"],"pred_close":p["pred_close"],"predicted_direction":p.get("predicted_direction"),"confidence":p.get("confidence"),"regime":p.get("regime"),"expected_return_pct":p.get("expected_return_pct")})
-    mask=(ledger.symbol.astype(str)==str(p["symbol"]))&(ledger.target_date.astype(str)==str(target_date))&(ledger.universe_version.astype(str)==str(universe_version))
-    if mask.any(): return ledger
-    return pd.concat([ledger,pd.DataFrame([row])],ignore_index=True)
+def prediction_path(prediction_date):
+    return (
+        PREDICTIONS_DIR
+        / f"predictions_{prediction_date}.csv"
+    )
 
-def evaluate_pending(ledger, actuals):
-    updated=0; ledger=ledger.copy()
-    for idx in ledger[ledger.actual_close.isna()].index:
-        symbol=str(ledger.at[idx,"symbol"]); target=pd.to_datetime(ledger.at[idx,"target_date"],errors="coerce")
-        if pd.isna(target): continue
-        a=actuals.get(symbol,{}).get(target.strftime("%Y-%m-%d"))
-        if a is None: continue
-        base=float(ledger.at[idx,"base_close"]); pc=float(ledger.at[idx,"pred_close"])
-        ledger.loc[idx,["actual_open","actual_high","actual_low","actual_close"]]=[a["open"],a["high"],a["low"],a["close"]]
-        ledger.loc[idx,["open_error","high_error","low_error","close_error"]]=[a["open"]-ledger.at[idx,"pred_open"],a["high"]-ledger.at[idx,"pred_high"],a["low"]-ledger.at[idx,"pred_low"],a["close"]-pc]
-        ledger.at[idx,"direction_correct"]=int((pc>base)==(a["close"]>base)); updated+=1
-    return ledger,updated
 
-def performance_report(ledger):
-    done=ledger.dropna(subset=["actual_close"]).copy()
-    if done.empty:return pd.DataFrame()
-    eps=1e-12; cols=["open","high","low","close"]
-    mape={f"{c}_mape":(done[f"{c}_error"].abs()/done[f"actual_{c}"].abs().clip(lower=eps)).mean() for c in cols}
-    return pd.DataFrame([{"predictions":len(done),"open_mae":done.open_error.abs().mean(),"high_mae":done.high_error.abs().mean(),"low_mae":done.low_error.abs().mean(),"close_mae":done.close_error.abs().mean(),**mape,"ohlc_mape":sum(mape.values())/4,"direction_accuracy":done.direction_correct.mean()}])
+def evaluation_path(market_date):
+    return (
+        EVALUATIONS_DIR
+        / f"evaluation_{market_date}.csv"
+    )
+
+
+def jump_path(prediction_date):
+    return (
+        JUMP_DIR
+        / f"jump_{prediction_date}.csv"
+    )
+
+
+def intraday_path(prediction_date):
+    return (
+        INTRADAY_DIR
+        / f"intraday_{prediction_date}.csv"
+    )
+
+
+def prediction_exists(prediction_date):
+    path = prediction_path(prediction_date)
+
+    if not path.exists():
+        return False
+
+    try:
+        df = pd.read_csv(path)
+
+        return (
+            len(df) >= 5
+            and "Symbol" in df.columns
+        )
+
+    except Exception:
+        return False
+
+
+def save_predictions(
+    df,
+    prediction_date,
+    metadata=None,
+):
+    path = prediction_path(prediction_date)
+
+    tmp = path.with_suffix(".tmp")
+
+    df.to_csv(
+        tmp,
+        index=False,
+    )
+
+    tmp.replace(path)
+
+    if metadata is not None:
+        write_json(
+            path.with_suffix(".json"),
+            metadata,
+        )
+
+    return path
+
+
+def load_predictions(prediction_date):
+    path = prediction_path(prediction_date)
+
+    if not path.exists():
+        return pd.DataFrame()
+
+    return pd.read_csv(path)
+
+
+def latest_prediction_date(on_or_before=None):
+    files = sorted(
+        PREDICTIONS_DIR.glob(
+            "predictions_*.csv"
+        )
+    )
+
+    dates = []
+
+    for path in files:
+        match = re.search(
+            r"predictions_(\d{4}-\d{2}-\d{2})",
+            path.name,
+        )
+
+        if not match:
+            continue
+
+        value = pd.Timestamp(
+            match.group(1)
+        ).date()
+
+        if (
+            on_or_before is None
+            or value <= on_or_before
+        ):
+            dates.append(value)
+
+    return max(dates) if dates else None
+
+
+def evaluation_exists(market_date):
+    return evaluation_path(
+        market_date
+    ).exists()
+
+
+def save_evaluation(df, market_date):
+    path = evaluation_path(market_date)
+
+    df.to_csv(
+        path,
+        index=False,
+    )
+
+    return path
+
+
+def append_daily_metrics(row):
+    if DAILY_METRICS_FILE.exists():
+        df = pd.read_csv(
+            DAILY_METRICS_FILE
+        )
+
+        df = df[
+            df["MarketDate"].astype(str)
+            != str(row["MarketDate"])
+        ]
+
+        df = pd.concat(
+            [
+                df,
+                pd.DataFrame([row]),
+            ],
+            ignore_index=True,
+        )
+
+    else:
+        df = pd.DataFrame([row])
+
+    df.to_csv(
+        DAILY_METRICS_FILE,
+        index=False,
+    )
+
+
+def rebuild_stock_reliability():
+    files = sorted(
+        EVALUATIONS_DIR.glob(
+            "evaluation_*.csv"
+        )
+    )
+
+    frames = []
+
+    for path in files:
+        try:
+            df = pd.read_csv(path)
+
+            if not df.empty:
+                frames.append(df)
+
+        except Exception:
+            continue
+
+    if not frames:
+        return
+
+    data = pd.concat(
+        frames,
+        ignore_index=True,
+    )
+
+    rows = []
+
+    for symbol, group in data.groupby(
+        "Symbol"
+    ):
+        samples = len(group)
+
+        metrics = {}
+
+        for target in [
+            "Open",
+            "High",
+            "Low",
+            "Close",
+        ]:
+            column = f"APE_{target}"
+
+            if column in group.columns:
+                metrics[target] = (
+                    group[column]
+                    .abs()
+                    .mean()
+                )
+
+        mape = (
+            sum(metrics.values())
+            / len(metrics)
+            if metrics
+            else 0
+        )
+
+        direction_accuracy = (
+            group["DirectionCorrect"]
+            .mean()
+            * 100
+            if "DirectionCorrect"
+            in group.columns
+            else 50
+        )
+
+        rows.append(
+            {
+                "Symbol": symbol,
+                "Samples": samples,
+                "MAPE": mape,
+                "DirectionAccuracy": direction_accuracy,
+            }
+        )
+
+    pd.DataFrame(rows).to_csv(
+        STOCK_RELIABILITY_FILE,
+        index=False,
+    )
+
+
+def save_jump_predictions(
+    df,
+    prediction_date,
+):
+    path = jump_path(prediction_date)
+
+    df = df.copy()
+
+    df["Prediction_Date"] = str(
+        prediction_date
+    )
+
+    df.to_csv(
+        path,
+        index=False,
+    )
+
+    return path
+
+
+def load_open_jump_predictions():
+    files = sorted(
+        JUMP_DIR.glob(
+            "jump_*.csv"
+        )
+    )
+
+    frames = []
+
+    for path in files:
+        try:
+            df = pd.read_csv(path)
+
+            if (
+                "Status" in df.columns
+                and (df["Status"] == "OPEN").any()
+            ):
+                frames.append(
+                    df[df["Status"] == "OPEN"]
+                )
+
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+
+    return pd.concat(
+        frames,
+        ignore_index=True,
+    )
+
+
+def save_jump_metrics(df):
+    if df.empty:
+        return
+
+    df.to_csv(
+        JUMP_METRICS_FILE,
+        index=False,
+    )
+
+
+def save_intraday_predictions(
+    df,
+    prediction_date,
+):
+    path = intraday_path(
+        prediction_date
+    )
+
+    df = df.copy()
+
+    df["Prediction_Date"] = str(
+        prediction_date
+    )
+
+    df.to_csv(
+        path,
+        index=False,
+    )
+
+    return path
+
+
+def save_intraday_metrics(df):
+    if df.empty:
+        return
+
+    df.to_csv(
+        INTRADAY_METRICS_FILE,
+        index=False,
+    )
