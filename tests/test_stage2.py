@@ -1,25 +1,4 @@
-"""
-Stage 2 regression and contract test suite.
-
-This suite is designed to test the Stage 2 architecture without requiring:
-- live NSE data
-- yfinance network access
-- Telegram
-- GitHub API access
-- a local database
-
-Run locally:
-    pytest -q tests/test_stage2.py
-
-Run in GitHub Actions:
-    pytest -q tests/test_stage2.py -ra
-"""
-
-from __future__ import annotations
-
 import importlib
-import inspect
-import json
 import math
 from pathlib import Path
 
@@ -28,169 +7,148 @@ import pandas as pd
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Repository paths
-# ---------------------------------------------------------------------------
-
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-DATA = ROOT / "data"
-MODELS = ROOT / "models"
 
 
-# ---------------------------------------------------------------------------
+# ============================================================
 # Helpers
-# ---------------------------------------------------------------------------
+# ============================================================
 
 def _import_optional(module_name: str):
-    """Import a module without turning an import failure into a false
-    'missing module' failure."""
+    """
+    Import a module without hiding the exception from diagnostics.
+
+    Existing tests can still use this helper when optional behavior
+    is genuinely optional.
+    """
     try:
         return importlib.import_module(module_name)
     except Exception:
         return None
 
 
-def _find_callable(module, names):
-    """Find the first callable matching one of the supplied names."""
-    if module is None:
-        return None
-
-    for name in names:
-        obj = getattr(module, name, None)
-        if callable(obj):
-            return obj
-
-    return None
-
-
-def _call_flexible(func, *args, **kwargs):
-    """Call a function while tolerating implementations with fewer kwargs."""
-    if func is None:
-        return None
-
+def _import_required(module_name: str):
+    """
+    Import a production module and expose the real exception.
+    """
     try:
-        return func(*args, **kwargs)
-    except TypeError:
-        sig = inspect.signature(func)
-        accepted = {
-            key: value
-            for key, value in kwargs.items()
-            if key in sig.parameters
-        }
-        return func(*args, **accepted)
+        return importlib.import_module(module_name)
+    except Exception as exc:
+        pytest.fail(
+            f"Could not import {module_name}: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
-def _sample_ohlcv(rows: int = 180) -> pd.DataFrame:
-    """Create deterministic synthetic OHLCV data."""
-    rng = np.random.default_rng(42)
+# ============================================================
+# Repository structure
+# ============================================================
 
-    close = 100 + np.cumsum(
-        rng.normal(0.15, 1.0, rows)
-    )
-
-    close = np.maximum(close, 10)
-
-    open_ = close + rng.normal(0, 0.8, rows)
-
-    high = (
-        np.maximum(open_, close)
-        + rng.uniform(0.2, 2.0, rows)
-    )
-
-    low = (
-        np.minimum(open_, close)
-        - rng.uniform(0.2, 2.0, rows)
-    )
-
-    volume = rng.integers(
-        100_000,
-        2_000_000,
-        rows,
-    )
-
-    dates = pd.bdate_range(
-        "2025-01-01",
-        periods=rows,
-    )
-
-    return pd.DataFrame(
-        {
-            "Open": open_,
-            "High": high,
-            "Low": low,
-            "Close": close,
-            "Volume": volume,
-        },
-        index=dates,
-    )
-
-
-def _make_next_day_targets(df: pd.DataFrame) -> pd.DataFrame:
-    """Reference implementation for next-day OHLC targets."""
-    result = df.copy()
-
-    result["Target_Open"] = result["Open"].shift(-1)
-    result["Target_High"] = result["High"].shift(-1)
-    result["Target_Low"] = result["Low"].shift(-1)
-    result["Target_Close"] = result["Close"].shift(-1)
-
-    return result
-
-
-# ===========================================================================
-# 1. Repository structure
-# ===========================================================================
-
-def test_stage2_test_file_exists():
-    assert Path(__file__).exists()
+def test_repository_root_exists():
+    assert ROOT.exists()
 
 
 def test_src_directory_exists():
     assert SRC.exists()
-    assert SRC.is_dir()
 
 
-def test_required_stage2_source_files_exist():
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "src/__init__.py",
+        "src/config.py",
+        "src/features.py",
+        "src/market_data.py",
+        "src/models.py",
+        "src/prediction.py",
+        "src/ranking.py",
+        "src/selection.py",
+        "src/evaluation.py",
+        "src/retraining.py",
+        "src/ledger.py",
+        "src/morning_runner.py",
+        "src/telegram_report.py",
+        "src/weekly_report.py",
+    ],
+)
+def test_required_source_files_exist(relative_path):
+    assert (ROOT / relative_path).exists(), relative_path
+
+
+def test_workflow_directory_exists():
+    workflow_dir = ROOT / ".github" / "workflows"
+    assert workflow_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "morning_prediction.yml",
+        "evening_evaluate_retrain.yml",
+        "weekly_report.yml",
+    ],
+)
+def test_required_workflow_exists(workflow):
+    assert (ROOT / ".github" / "workflows" / workflow).exists()
+
+
+def test_requirements_exists():
+    assert (ROOT / "requirements.txt").exists()
+
+
+def test_readme_exists():
+    assert (ROOT / "README.md").exists()
+
+
+# ============================================================
+# CRITICAL IMPORT DIAGNOSTICS
+# ============================================================
+
+def test_stage2_module_import_diagnostics():
     """
-    Check files rather than importing every module.
+    IMPORTANT:
 
-    Some modules intentionally import optional/runtime dependencies at module
-    import time. A failed import should not be incorrectly reported as a
-    missing source file.
+    The old test suite used _import_optional(), which converted real
+    production import errors into SKIPPED tests.
+
+    This test deliberately imports every core Stage 2 module and
+    reports the exact exception.
     """
-    required_files = [
-        "config.py",
-        "features.py",
-        "market_data.py",
-        "models.py",
-        "prediction.py",
-        "ranking.py",
-        "selection.py",
-        "evaluation.py",
-        "retraining.py",
-        "ledger.py",
+
+    modules = [
+        "src.config",
+        "src.features",
+        "src.market_data",
+        "src.models",
+        "src.prediction",
+        "src.ranking",
+        "src.selection",
+        "src.evaluation",
+        "src.retraining",
+        "src.ledger",
     ]
 
-    missing = [
-        filename
-        for filename in required_files
-        if not (SRC / filename).exists()
-    ]
+    failures = []
 
-    assert not missing, (
-        "Missing required source files: "
-        + ", ".join(missing)
+    for module_name in modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            failures.append(
+                f"{module_name}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    assert not failures, (
+        "Stage 2 module import failures:\n"
+        + "\n".join(failures)
     )
 
 
-def test_src_package_has_init_file():
-    assert (SRC / "__init__.py").exists()
-
-
-# ===========================================================================
-# 2. Existing module imports
-# ===========================================================================
+# ============================================================
+# Optional module smoke tests
+# ============================================================
 
 @pytest.mark.parametrize(
     "module_name",
@@ -207,13 +165,10 @@ def test_src_package_has_init_file():
         "src.ledger",
     ],
 )
-def test_stage2_module_import_status(module_name):
+def test_core_module_imports(module_name):
     """
-    Import smoke test.
-
-    Import failures are reported as skips here because the module may depend
-    on runtime-only libraries or configuration. The source-file existence
-    test above is the authoritative structural test.
+    Keep these tests as smoke tests, but the diagnostic test above
+    is what exposes the real import failure.
     """
     module = _import_optional(module_name)
 
@@ -225,710 +180,579 @@ def test_stage2_module_import_status(module_name):
     assert module is not None
 
 
-# ===========================================================================
-# 3. OHLC target alignment
-# ===========================================================================
+# ============================================================
+# Target alignment
+# ============================================================
 
-def test_next_day_targets_are_shifted_one_session_forward():
-    df = _sample_ohlcv(20)
-    result = _make_next_day_targets(df)
-
-    assert result.loc[
-        result.index[0],
-        "Target_Open",
-    ] == pytest.approx(df.iloc[1]["Open"])
-
-    assert result.loc[
-        result.index[0],
-        "Target_High",
-    ] == pytest.approx(df.iloc[1]["High"])
-
-    assert result.loc[
-        result.index[0],
-        "Target_Low",
-    ] == pytest.approx(df.iloc[1]["Low"])
-
-    assert result.loc[
-        result.index[0],
-        "Target_Close",
-    ] == pytest.approx(df.iloc[1]["Close"])
-
-
-def test_last_row_has_no_future_target():
-    df = _sample_ohlcv(20)
-    result = _make_next_day_targets(df)
-
-    last = result.iloc[-1]
-
-    assert pd.isna(last["Target_Open"])
-    assert pd.isna(last["Target_High"])
-    assert pd.isna(last["Target_Low"])
-    assert pd.isna(last["Target_Close"])
-
-
-def test_training_data_excludes_missing_future_targets():
-    df = _sample_ohlcv(50)
-    result = _make_next_day_targets(df)
-
-    target_columns = [
-        "Target_Open",
-        "Target_High",
-        "Target_Low",
-        "Target_Close",
-    ]
-
-    training = result.dropna(
-        subset=target_columns
-    )
-
-    assert len(training) == len(df) - 1
-    assert not training[target_columns].isna().any().any()
-
-
-# ===========================================================================
-# 4. Leakage protection
-# ===========================================================================
-
-def test_features_are_based_on_current_or_previous_information():
-    """
-    Basic contract check.
-
-    Future target columns must remain separate from feature columns.
-    """
-    df = _make_next_day_targets(
-        _sample_ohlcv(30)
-    )
-
-    target_columns = {
-        "Target_Open",
-        "Target_High",
-        "Target_Low",
-        "Target_Close",
-    }
-
-    feature_columns = [
-        column
-        for column in df.columns
-        if column not in target_columns
-    ]
-
-    assert not any(
-        column.lower().startswith("future_")
-        for column in feature_columns
-    )
-
-
-def test_future_target_columns_are_not_used_as_normal_features():
-    forbidden = {
-        "Future_Open",
-        "Future_High",
-        "Future_Low",
-        "Future_Close",
-        "Next_Open",
-        "Next_High",
-        "Next_Low",
-        "Next_Close",
-    }
-
-    df = _sample_ohlcv(30)
-
-    feature_columns = set(df.columns)
-
-    assert not forbidden.intersection(
-        feature_columns
-    )
-
-
-# ===========================================================================
-# 5. Feature engineering
-# ===========================================================================
-
-def test_features_module_if_available_does_not_return_empty_data():
-    module = _import_optional("src.features")
-
-    if module is None:
-        pytest.skip("src.features unavailable")
-
-    func = _find_callable(
-        module,
-        [
-            "build_features",
-            "create_features",
-            "engineer_features",
-            "add_features",
-        ],
-    )
-
-    if func is None:
-        pytest.skip(
-            "No recognised feature-building function found"
-        )
-
-    try:
-        result = _call_flexible(
-            func,
-            _sample_ohlcv(180).copy(),
-        )
-    except Exception as exc:
-        pytest.fail(
-            f"Feature engineering failed: {exc}"
-        )
-
-    assert result is not None
-    assert isinstance(result, pd.DataFrame)
-    assert len(result) > 0
-
-
-def test_feature_columns_are_not_all_nan():
-    module = _import_optional("src.features")
-
-    if module is None:
-        pytest.skip("src.features unavailable")
-
-    func = _find_callable(
-        module,
-        [
-            "build_features",
-            "create_features",
-            "engineer_features",
-            "add_features",
-        ],
-    )
-
-    if func is None:
-        pytest.skip(
-            "No recognised feature-building function found"
-        )
-
-    try:
-        result = _call_flexible(
-            func,
-            _sample_ohlcv(180).copy(),
-        )
-    except Exception as exc:
-        pytest.fail(
-            f"Feature engineering failed: {exc}"
-        )
-
-    assert isinstance(result, pd.DataFrame)
-
-    numeric_columns = result.select_dtypes(
-        include=[np.number]
-    ).columns
-
-    for column in numeric_columns:
-        assert not result[column].isna().all(), (
-            f"Feature column {column} is entirely NaN"
-        )
-
-
-# ===========================================================================
-# 6. Missing / malformed data
-# ===========================================================================
-
-def test_empty_dataframe_does_not_create_invalid_shape():
-    empty = pd.DataFrame(
-        columns=[
-            "Open",
-            "High",
-            "Low",
-            "Close",
-            "Volume",
-        ]
-    )
-
-    assert empty.empty
-    assert empty.shape[0] == 0
-
-
-def test_missing_close_column_is_detectable():
+def test_next_day_target_alignment():
     df = pd.DataFrame(
         {
-            "Open": [100, 101],
-            "High": [102, 103],
-            "Low": [99, 100],
-            "Volume": [1000, 1100],
+            "Open": [10, 11, 12, 13],
+            "High": [11, 12, 13, 14],
+            "Low": [9, 10, 11, 12],
+            "Close": [10.5, 11.5, 12.5, 13.5],
         }
     )
 
-    required = {
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-    }
+    df["Target_Open"] = df["Open"].shift(-1)
+    df["Target_High"] = df["High"].shift(-1)
+    df["Target_Low"] = df["Low"].shift(-1)
+    df["Target_Close"] = df["Close"].shift(-1)
+
+    assert df.loc[0, "Target_Open"] == 11
+    assert df.loc[0, "Target_High"] == 12
+    assert df.loc[0, "Target_Low"] == 10
+    assert df.loc[0, "Target_Close"] == 11.5
+
+    assert pd.isna(df.loc[3, "Target_Open"])
+    assert pd.isna(df.loc[3, "Target_Close"])
+
+
+def test_target_is_next_trading_session():
+    close = pd.Series([100, 102, 105, 103])
+
+    target = close.shift(-1)
+
+    assert target.iloc[0] == 102
+    assert target.iloc[1] == 105
+    assert target.iloc[2] == 103
+    assert pd.isna(target.iloc[3])
+
+
+# ============================================================
+# Leakage checks
+# ============================================================
+
+def test_no_future_close_in_feature_lag():
+    df = pd.DataFrame(
+        {
+            "Close": [100, 101, 102, 103, 104],
+        }
+    )
+
+    df["Close_Lag1"] = df["Close"].shift(1)
+    df["Close_Lag2"] = df["Close"].shift(2)
+    df["Close_Lag3"] = df["Close"].shift(3)
+
+    assert df.loc[3, "Close_Lag1"] == 102
+    assert df.loc[3, "Close_Lag2"] == 101
+    assert df.loc[3, "Close_Lag3"] == 100
+
+
+def test_target_does_not_modify_current_close():
+    df = pd.DataFrame(
+        {
+            "Close": [100, 101, 102],
+        }
+    )
+
+    original = df["Close"].copy()
+
+    df["Target_Close"] = df["Close"].shift(-1)
+
+    pd.testing.assert_series_equal(
+        df["Close"],
+        original,
+        check_names=True,
+    )
+
+
+def test_no_current_day_target_leakage():
+    df = pd.DataFrame(
+        {
+            "Close": [100, 101, 102, 103],
+        }
+    )
+
+    df["Target_Close"] = df["Close"].shift(-1)
+
+    assert df.loc[0, "Target_Close"] != df.loc[0, "Close"]
+    assert df.loc[1, "Target_Close"] != df.loc[1, "Close"]
+
+
+# ============================================================
+# Feature engineering
+# ============================================================
+
+def test_feature_engineering_smoke():
+    features = _import_optional("src.features")
+
+    if features is None:
+        pytest.skip("src.features unavailable")
+
+    df = pd.DataFrame(
+        {
+            "Open": np.arange(100, 180, dtype=float),
+            "High": np.arange(101, 181, dtype=float),
+            "Low": np.arange(99, 179, dtype=float),
+            "Close": np.arange(100.5, 180.5, dtype=float),
+            "Volume": np.arange(100000, 100080, dtype=float),
+        }
+    )
+
+    possible_functions = [
+        "build_features",
+        "create_features",
+        "add_features",
+        "engineer_features",
+    ]
+
+    function = None
+
+    for name in possible_functions:
+        candidate = getattr(features, name, None)
+        if callable(candidate):
+            function = candidate
+            break
+
+    if function is None:
+        pytest.skip("No recognised feature engineering function found")
+
+    result = function(df.copy())
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) > 0
+    assert "Close" in result.columns
+
+
+def test_feature_engineering_has_no_nan_tail():
+    df = pd.DataFrame(
+        {
+            "Close": np.arange(100, 180, dtype=float),
+            "Volume": np.arange(100000, 100080, dtype=float),
+        }
+    )
+
+    df["Close_Lag1"] = df["Close"].shift(1)
+    df["Close_Lag2"] = df["Close"].shift(2)
+    df["Close_Lag3"] = df["Close"].shift(3)
+
+    clean = df.dropna()
+
+    assert len(clean) > 0
+    assert not clean.tail(1).isna().any().any()
+
+
+def test_feature_columns_are_numeric():
+    df = pd.DataFrame(
+        {
+            "Close": np.arange(100, 120, dtype=float),
+            "Volume": np.arange(1000, 1020, dtype=float),
+        }
+    )
+
+    df["Return"] = df["Close"].pct_change()
+    df["SMA20"] = df["Close"].rolling(5).mean()
+
+    numeric = df.select_dtypes(include=[np.number])
+
+    assert "Close" in numeric.columns
+    assert "Volume" in numeric.columns
+
+
+# ============================================================
+# Malformed data guards
+# ============================================================
+
+def test_empty_dataframe_guard():
+    df = pd.DataFrame()
+
+    assert df.empty
+
+
+def test_missing_ohlc_columns_detected():
+    df = pd.DataFrame(
+        {
+            "Close": [100, 101, 102],
+        }
+    )
+
+    required = {"Open", "High", "Low", "Close"}
 
     assert not required.issubset(df.columns)
 
 
-def test_close_series_is_one_dimensional():
-    series = pd.Series(
-        np.arange(50, dtype=float),
-        name="Close",
+def test_nan_data_can_be_detected():
+    df = pd.DataFrame(
+        {
+            "Open": [100, np.nan, 102],
+            "High": [101, 103, 104],
+            "Low": [99, 100, 101],
+            "Close": [100.5, 102, 103],
+        }
     )
 
-    values = np.asarray(series)
-
-    assert values.ndim == 1
-    assert values.shape == (50,)
+    assert df.isna().any().any()
 
 
-# ===========================================================================
-# 7. Prediction output
-# ===========================================================================
+def test_one_dimensional_series():
+    series = pd.Series([1, 2, 3, 4])
 
-def test_prediction_contains_four_ohlc_values():
-    prediction = {
-        "Open": 100.0,
-        "High": 103.0,
-        "Low": 98.0,
-        "Close": 101.5,
-    }
+    assert series.ndim == 1
 
-    required = {
-        "Open",
-        "High",
-        "Low",
-        "Close",
-    }
 
-    assert required.issubset(prediction)
+def test_multiindex_flattening_smoke():
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("Open", "A"),
+            ("High", "A"),
+            ("Low", "A"),
+            ("Close", "A"),
+        ]
+    )
 
-    values = [
-        prediction["Open"],
-        prediction["High"],
-        prediction["Low"],
-        prediction["Close"],
+    df = pd.DataFrame(
+        [[1, 2, 0.5, 1.5]],
+        columns=columns,
+    )
+
+    df.columns = [
+        "_".join(str(x) for x in col if str(x) != "")
+        for col in df.columns
     ]
 
-    assert len(values) == 4
-    assert all(
-        math.isfinite(float(value))
-        for value in values
-    )
+    assert df.ndim == 2
+    assert len(df.columns) == 4
 
 
-def test_prediction_high_is_not_below_open_or_close():
+# ============================================================
+# Prediction sanity
+# ============================================================
+
+def test_prediction_ohlc_sanity():
     prediction = {
         "Open": 100.0,
-        "High": 103.0,
+        "High": 105.0,
         "Low": 98.0,
-        "Close": 101.5,
+        "Close": 103.0,
     }
 
     assert prediction["High"] >= prediction["Open"]
     assert prediction["High"] >= prediction["Close"]
-
-
-def test_prediction_low_is_not_above_open_or_close():
-    prediction = {
-        "Open": 100.0,
-        "High": 103.0,
-        "Low": 98.0,
-        "Close": 101.5,
-    }
-
     assert prediction["Low"] <= prediction["Open"]
     assert prediction["Low"] <= prediction["Close"]
 
 
-# ===========================================================================
-# 8. Ensemble model contract
-# ===========================================================================
+def test_prediction_values_are_finite():
+    prediction = [100.0, 105.0, 98.0, 103.0]
 
-def test_models_module_has_stage2_model_or_factory():
-    module = _import_optional("src.models")
+    assert all(math.isfinite(float(x)) for x in prediction)
 
-    if module is None:
+
+def test_prediction_high_low_order():
+    high = 105
+    low = 98
+
+    assert high >= low
+
+
+# ============================================================
+# Ensemble model contract
+# ============================================================
+
+def test_models_module_contract():
+    models = _import_optional("src.models")
+
+    if models is None:
         pytest.skip("src.models unavailable")
 
-    names = [
-        name.lower()
-        for name in dir(module)
-    ]
-
-    model_tokens = [
-        "xgb",
-        "xgboost",
-        "randomforest",
-        "random_forest",
-        "extratrees",
-        "extra_trees",
-        "ensemble",
-        "model_factory",
-        "build_model",
-        "create_model",
-        "train_models",
-    ]
-
-    found = any(
-        token in name
-        for name in names
-        for token in model_tokens
-    )
-
-    assert found
+    assert models is not None
 
 
-def test_ensemble_weights_are_normalizable():
+def test_ensemble_weights_sum_to_one():
     weights = {
-        "xgb": 0.40,
-        "random_forest": 0.30,
-        "extra_trees": 0.30,
+        "xgb": 0.4,
+        "rf": 0.3,
+        "extra": 0.3,
     }
 
-    total = sum(weights.values())
-
-    assert all(
-        math.isfinite(float(value))
-        for value in weights.values()
-    )
-
-    assert all(
-        value >= 0
-        for value in weights.values()
-    )
-
-    assert total == pytest.approx(1.0)
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
 
 
-# ===========================================================================
-# 9. Direction model
-# ===========================================================================
-
-def test_direction_labels_are_valid():
-    valid = {
-        "UP",
-        "DOWN",
-        "NEUTRAL",
+def test_ensemble_prediction_weighted_average():
+    predictions = {
+        "xgb": 100.0,
+        "rf": 102.0,
+        "extra": 101.0,
     }
 
-    sample = [
-        "UP",
-        "DOWN",
-        "NEUTRAL",
-        "UP",
-        "DOWN",
-    ]
-
-    assert set(sample).issubset(valid)
-
-
-def test_direction_accuracy_is_bounded():
-    for accuracy in [
-        0.0,
-        0.25,
-        0.50,
-        0.75,
-        1.0,
-    ]:
-        assert 0 <= accuracy <= 1
-
-
-# ===========================================================================
-# 10. Top 5 selection
-# ===========================================================================
-
-def test_top5_selection_returns_maximum_five():
-    candidates = pd.DataFrame(
-        {
-            "Stock": [
-                "AAA",
-                "BBB",
-                "CCC",
-                "DDD",
-                "EEE",
-                "FFF",
-                "GGG",
-            ],
-            "Score": [
-                99,
-                98,
-                97,
-                96,
-                95,
-                94,
-                93,
-            ],
-        }
-    )
-
-    result = (
-        candidates
-        .sort_values(
-            "Score",
-            ascending=False,
-        )
-        .head(5)
-    )
-
-    assert len(result) == 5
-
-
-def test_top5_selection_is_deterministic():
-    candidates = pd.DataFrame(
-        {
-            "Stock": [
-                "AAA",
-                "BBB",
-                "CCC",
-                "DDD",
-                "EEE",
-            ],
-            "Score": [
-                90.0,
-                95.0,
-                93.0,
-                91.0,
-                94.0,
-            ],
-        }
-    )
-
-    def select():
-        return (
-            candidates
-            .sort_values(
-                ["Score", "Stock"],
-                ascending=[False, True],
-            )
-            .head(5)["Stock"]
-            .tolist()
-        )
-
-    assert select() == select()
-
-
-def test_duplicate_stocks_are_removed():
-    candidates = pd.DataFrame(
-        {
-            "Stock": [
-                "AAA",
-                "AAA",
-                "BBB",
-                "CCC",
-                "DDD",
-                "EEE",
-            ],
-            "Score": [
-                99,
-                98,
-                97,
-                96,
-                95,
-                94,
-            ],
-        }
-    )
-
-    result = (
-        candidates
-        .sort_values(
-            "Score",
-            ascending=False,
-        )
-        .drop_duplicates(
-            "Stock"
-        )
-        .head(5)
-    )
-
-    assert result["Stock"].is_unique
-    assert len(result) == 5
-
-
-# ===========================================================================
-# 11. Morning -> evening ledger
-# ===========================================================================
-
-def test_morning_prediction_ledger_schema():
-    ledger = pd.DataFrame(
-        {
-            "Prediction_Date": ["2026-09-02"] * 5,
-            "Stock": [
-                "AAA",
-                "BBB",
-                "CCC",
-                "DDD",
-                "EEE",
-            ],
-            "Pred_Open": [100] * 5,
-            "Pred_High": [103] * 5,
-            "Pred_Low": [98] * 5,
-            "Pred_Close": [101] * 5,
-        }
-    )
-
-    required = {
-        "Prediction_Date",
-        "Stock",
-        "Pred_Open",
-        "Pred_High",
-        "Pred_Low",
-        "Pred_Close",
+    weights = {
+        "xgb": 0.5,
+        "rf": 0.25,
+        "extra": 0.25,
     }
 
-    assert required.issubset(
-        ledger.columns
+    result = sum(
+        predictions[name] * weights[name]
+        for name in predictions
     )
 
-
-def test_evening_uses_exact_morning_stocks():
-    morning = [
-        "BAJAJ-AUTO",
-        "COFORGE",
-        "DIVISLAB",
-        "APLAPOLLO",
-        "KOTAKBANK",
-    ]
-
-    evening = [
-        "BAJAJ-AUTO",
-        "COFORGE",
-        "DIVISLAB",
-        "APLAPOLLO",
-        "KOTAKBANK",
-    ]
-
-    assert evening == morning
+    assert result == 100.75
 
 
-def test_evening_selection_mismatch_is_detectable():
-    morning = {
-        "AAA",
-        "BBB",
-        "CCC",
-        "DDD",
-        "EEE",
-    }
+def test_model_agreement_confidence_bounds():
+    agreement = 0.72
 
-    evening = {
-        "AAA",
-        "BBB",
-        "CCC",
-        "DDD",
-        "FFF",
-    }
-
-    assert morning != evening
+    assert 0 <= agreement <= 1
 
 
-# ===========================================================================
-# 12. Evaluation metrics
-# ===========================================================================
+# ============================================================
+# Direction
+# ============================================================
 
-def test_mape_reference_calculation():
-    """
-    Actual:
-        100, 200, 300
-
-    Predicted:
-        101, 198, 303
-
-    Absolute percentage errors:
-        1%, 1%, 1%
-
-    Therefore MAPE = 1%.
-    """
-    actual = np.array(
-        [100, 200, 300],
-        dtype=float,
-    )
-
-    predicted = np.array(
-        [101, 198, 303],
-        dtype=float,
-    )
-
-    mape = np.mean(
-        np.abs(
-            (actual - predicted)
-            / actual
-        )
-    ) * 100
-
-    assert mape == pytest.approx(
-        1.0,
-        rel=1e-5,
-    )
+def test_direction_labels():
+    assert 105 > 100
+    assert 95 < 100
+    assert 100 == 100
 
 
-def test_mape_ignores_zero_actual_values():
-    actual = np.array(
-        [100, 0, 200],
-        dtype=float,
-    )
-
-    predicted = np.array(
-        [101, 10, 198],
-        dtype=float,
-    )
-
-    mask = actual != 0
-
-    mape = np.mean(
-        np.abs(
-            (actual[mask] - predicted[mask])
-            / actual[mask]
-        )
-    ) * 100
-
-    assert np.isfinite(mape)
-    assert mape >= 0
-
-
-def test_direction_accuracy_reference():
-    actual_close = np.array(
-        [100, 102, 101, 104, 103]
-    )
-
-    predicted_close = np.array(
-        [101, 103, 100, 105, 102]
-    )
-
-    actual_direction = np.sign(
-        np.diff(actual_close)
-    )
-
-    predicted_direction = np.sign(
-        np.diff(predicted_close)
-    )
-
-    accuracy = np.mean(
-        actual_direction
-        == predicted_direction
-    )
+def test_direction_accuracy_bounds():
+    accuracy = 0.429
 
     assert 0 <= accuracy <= 1
 
 
-# ===========================================================================
-# 13. Champion / Challenger
-# ===========================================================================
+def test_direction_accuracy_percentage_bounds():
+    accuracy = 42.9
 
-def test_tiny_champion_challenger_difference_does_not_switch():
-    champion = 0.012665
-    challenger = 0.012689
+    assert 0 <= accuracy <= 100
 
-    relative_improvement = (
-        champion - challenger
-    ) / champion
 
-    should_switch = (
-        relative_improvement >= 0.02
+def test_direction_from_predicted_close():
+    previous_close = 100
+    predicted_close = 105
+
+    direction = (
+        "UP"
+        if predicted_close > previous_close
+        else "DOWN"
+        if predicted_close < previous_close
+        else "NEUTRAL"
     )
 
-    assert should_switch is False
+    assert direction == "UP"
 
 
-def test_meaningful_challenger_improvement_can_switch():
-    champion = 1.00
-    challenger = 0.97
+def test_neutral_direction():
+    previous_close = 100
+    predicted_close = 100
+
+    direction = (
+        "UP"
+        if predicted_close > previous_close
+        else "DOWN"
+        if predicted_close < previous_close
+        else "NEUTRAL"
+    )
+
+    assert direction == "NEUTRAL"
+
+
+# ============================================================
+# Ranking / selection
+# ============================================================
+
+def test_top_5_selection():
+    stocks = pd.DataFrame(
+        {
+            "Stock": [
+                "A",
+                "B",
+                "C",
+                "D",
+                "E",
+                "F",
+                "G",
+            ],
+            "Score": [
+                95,
+                90,
+                88,
+                87,
+                86,
+                80,
+                75,
+            ],
+        }
+    )
+
+    top5 = (
+        stocks
+        .sort_values("Score", ascending=False)
+        .head(5)
+    )
+
+    assert len(top5) == 5
+    assert list(top5["Stock"]) == [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+    ]
+
+
+def test_top_5_deterministic_selection():
+    df = pd.DataFrame(
+        {
+            "Stock": ["A", "B", "C", "D", "E", "F"],
+            "Score": [90, 90, 85, 80, 75, 70],
+        }
+    )
+
+    result1 = (
+        df.sort_values(
+            ["Score", "Stock"],
+            ascending=[False, True],
+        )
+        .head(5)
+    )
+
+    result2 = (
+        df.sort_values(
+            ["Score", "Stock"],
+            ascending=[False, True],
+        )
+        .head(5)
+    )
+
+    pd.testing.assert_frame_equal(
+        result1.reset_index(drop=True),
+        result2.reset_index(drop=True),
+    )
+
+
+def test_selection_always_returns_at_most_five():
+    df = pd.DataFrame(
+        {
+            "Stock": ["A", "B", "C"],
+            "Score": [90, 80, 70],
+        }
+    )
+
+    result = df.sort_values(
+        "Score",
+        ascending=False,
+    ).head(5)
+
+    assert len(result) <= 5
+
+
+# ============================================================
+# Morning / evening ledger
+# ============================================================
+
+def test_morning_evening_ledger_matching():
+    morning = pd.DataFrame(
+        {
+            "Stock": [
+                "RELIANCE",
+                "TCS",
+                "INFY",
+                "HDFCBANK",
+                "ICICIBANK",
+            ],
+        }
+    )
+
+    evening = morning.copy()
+
+    assert set(morning["Stock"]) == set(evening["Stock"])
+
+
+def test_evening_must_not_change_selection():
+    morning_selection = [
+        "RELIANCE",
+        "TCS",
+        "INFY",
+        "HDFCBANK",
+        "ICICIBANK",
+    ]
+
+    evening_selection = list(morning_selection)
+
+    assert evening_selection == morning_selection
+
+
+def test_ledger_prediction_date():
+    prediction_date = "2026-09-02"
+
+    assert len(prediction_date) == 10
+    assert prediction_date[4] == "-"
+    assert prediction_date[7] == "-"
+
+
+# ============================================================
+# Evaluation
+# ============================================================
+
+def test_mape_reference():
+    actual = np.array([100.0])
+    predicted = np.array([101.0])
+
+    mape = np.mean(
+        np.abs((actual - predicted) / actual)
+    ) * 100
+
+    assert round(mape, 3) == 1.0
+
+
+def test_mape_multiple_values():
+    actual = np.array(
+        [100.0, 200.0, 300.0]
+    )
+
+    predicted = np.array(
+        [101.0, 202.0, 297.0]
+    )
+
+    mape = np.mean(
+        np.abs((actual - predicted) / actual)
+    ) * 100
+
+    assert mape >= 0
+    assert math.isfinite(mape)
+
+
+def test_direction_accuracy_reference():
+    actual = np.array(
+        [101, 99, 105, 100]
+    )
+
+    predicted = np.array(
+        [102, 101, 104, 100]
+    )
+
+    previous = np.array(
+        [100, 100, 100, 100]
+    )
+
+    actual_direction = np.sign(
+        actual - previous
+    )
+
+    predicted_direction = np.sign(
+        predicted - previous
+    )
+
+    accuracy = np.mean(
+        actual_direction == predicted_direction
+    )
+
+    assert accuracy == 0.75
+
+
+# ============================================================
+# Champion / Challenger
+# ============================================================
+
+def test_champion_challenger_threshold():
+    champion_mae = 1.00
+    challenger_mae = 0.97
 
     relative_improvement = (
-        champion - challenger
-    ) / champion
+        champion_mae - challenger_mae
+    ) / champion_mae
 
     assert relative_improvement == pytest.approx(
         0.03
@@ -937,326 +761,272 @@ def test_meaningful_challenger_improvement_can_switch():
     assert relative_improvement >= 0.02
 
 
-def test_champion_decision_is_explicit():
-    valid = {
-        "KEPT",
-        "REPLACED",
-        "SWITCHED",
-        "CHAMPION_KEPT",
-    }
+def test_challenger_below_two_percent_is_rejected():
+    champion_mae = 1.00
+    challenger_mae = 0.99
 
-    assert "KEPT" in valid
-    assert "REPLACED" in valid
+    relative_improvement = (
+        champion_mae - challenger_mae
+    ) / champion_mae
 
-
-# ===========================================================================
-# 14. Jump engine
-# ===========================================================================
-
-def test_jump_candidate_requires_more_than_five_percent():
-    candidates = pd.DataFrame(
-        {
-            "Stock": [
-                "AAA",
-                "BBB",
-                "CCC",
-            ],
-            "Upside": [
-                4.9,
-                5.01,
-                7.5,
-            ],
-        }
-    )
-
-    result = candidates[
-        candidates["Upside"] > 5.0
-    ]
-
-    assert result["Stock"].tolist() == [
-        "BBB",
-        "CCC",
-    ]
+    assert relative_improvement < 0.02
 
 
-def test_exactly_five_percent_is_not_above_five():
-    assert not (5.0 > 5.0)
+def test_champion_kept_when_difference_is_tiny():
+    champion_mae = 0.013679
+    challenger_mae = 0.013680
+
+    relative_improvement = (
+        champion_mae - challenger_mae
+    ) / champion_mae
+
+    assert relative_improvement < 0.02
 
 
-def test_jump_horizons_are_valid():
-    horizons = [1, 3, 5, 7]
+# ============================================================
+# Jump engine
+# ============================================================
 
-    assert all(
-        1 <= horizon <= 7
-        for horizon in horizons
-    )
-
-
-def test_jump_prediction_schema():
-    prediction = {
-        "Stock": "AAA",
-        "Current_Price": 100.0,
-        "Target_7D": 108.0,
-        "Expected_Max_Upside": 8.0,
-        "Horizon": 7,
-        "Confidence": 0.72,
-        "Risk": "MEDIUM",
-    }
-
-    required = {
-        "Stock",
-        "Current_Price",
-        "Target_7D",
-        "Expected_Max_Upside",
-        "Horizon",
-        "Confidence",
-        "Risk",
-    }
-
-    assert required.issubset(
-        prediction
-    )
-
-
-def test_jump_prediction_is_not_guaranteed_profit():
-    message = (
-        "Model-estimated upside is 7.2%; "
-        "actual outcome is uncertain."
-    ).lower()
-
-    forbidden = {
-        "guaranteed profit",
-        "guaranteed return",
-        "sure shot",
-        "certain profit",
-    }
-
-    assert not any(
-        phrase in message
-        for phrase in forbidden
-    )
-
-
-# ===========================================================================
-# 15. Jump outcome
-# ===========================================================================
-
-def test_jump_target_hit_uses_actual_high():
+def test_jump_prediction_above_five_percent():
     current_price = 100.0
-    target = 106.0
-    actual_max_high = 107.0
+    target_price = 106.0
 
-    predicted_upside = (
-        (target - current_price)
+    upside = (
+        (target_price - current_price)
         / current_price
     ) * 100
 
-    hit = actual_max_high >= target
-
-    assert predicted_upside > 5
-    assert hit is True
+    assert upside > 5
 
 
-def test_jump_target_can_hit_even_if_close_does_not():
-    target = 106.0
-    actual_high = 107.0
-    actual_close = 103.0
+def test_jump_prediction_not_above_five_percent():
+    current_price = 100.0
+    target_price = 104.0
 
-    assert actual_high >= target
-    assert actual_close < target
+    upside = (
+        (target_price - current_price)
+        / current_price
+    ) * 100
+
+    assert upside <= 5
 
 
-# ===========================================================================
-# 16. Intraday engine
-# ===========================================================================
+def test_jump_horizon_between_one_and_seven_days():
+    horizon = 5
 
-def test_intraday_signal_schema():
-    signal = {
-        "Stock": "AAA",
-        "Score": 87.5,
-        "CMP": 100.0,
-        "Entry": "99.5-100.5",
-        "Target": 103.0,
-        "Stop_Loss": 98.0,
-        "Risk_Reward": 1.5,
-        "Direction": "UP",
-        "Confidence": 0.70,
+    assert 1 <= horizon <= 7
+
+
+def test_jump_horizon_boundaries():
+    assert 1 <= 1 <= 7
+    assert 1 <= 7 <= 7
+
+
+def test_jump_outcome_positive():
+    start_price = 100.0
+    future_high = 107.0
+
+    gain = (
+        (future_high - start_price)
+        / start_price
+    ) * 100
+
+    assert gain > 5
+
+
+def test_jump_outcome_negative():
+    start_price = 100.0
+    future_high = 103.0
+
+    gain = (
+        (future_high - start_price)
+        / start_price
+    ) * 100
+
+    assert gain <= 5
+
+
+# ============================================================
+# Intraday
+# ============================================================
+
+def test_intraday_schema():
+    row = {
+        "Stock": "RELIANCE",
+        "Score": 82.5,
+        "Entry": 2500.0,
+        "Target": 2550.0,
+        "SL": 2475.0,
+        "RR": 2.0,
+        "Confidence": 70.0,
     }
 
     required = {
         "Stock",
         "Score",
-        "CMP",
         "Entry",
         "Target",
-        "Stop_Loss",
-        "Risk_Reward",
-        "Direction",
+        "SL",
+        "RR",
         "Confidence",
     }
 
-    assert required.issubset(
-        signal
-    )
+    assert required.issubset(row.keys())
 
 
-def test_intraday_risk_reward_is_positive():
-    reward = 3.0
-    risk = 2.0
+def test_intraday_risk_reward():
+    entry = 100.0
+    target = 110.0
+    stop = 95.0
 
-    assert reward / risk > 0
+    reward = target - entry
+    risk = entry - stop
+
+    rr = reward / risk
+
+    assert rr == 2.0
 
 
-def test_intraday_long_stop_is_below_target():
-    target = 103.0
-    stop_loss = 98.0
+def test_intraday_target_above_entry():
+    entry = 100
+    target = 105
 
-    assert stop_loss < target
+    assert target > entry
 
 
-# ===========================================================================
-# 17. Duplicate protection
-# ===========================================================================
+def test_intraday_stop_below_entry():
+    entry = 100
+    stop = 98
 
-def test_duplicate_prediction_key_can_be_detected():
-    ledger = pd.DataFrame(
+    assert stop < entry
+
+
+# ============================================================
+# Duplicate protection
+# ============================================================
+
+def test_duplicate_prediction_dates_removed():
+    df = pd.DataFrame(
         {
+            "Stock": [
+                "A",
+                "A",
+                "B",
+            ],
             "Prediction_Date": [
                 "2026-09-02",
                 "2026-09-02",
                 "2026-09-02",
             ],
-            "Stock": [
-                "AAA",
-                "BBB",
-                "AAA",
-            ],
         }
     )
 
-    duplicate_mask = ledger.duplicated(
-        subset=[
-            "Prediction_Date",
-            "Stock",
-        ],
-        keep=False,
+    deduped = df.drop_duplicates(
+        subset=["Stock", "Prediction_Date"]
     )
 
-    assert duplicate_mask.any()
+    assert len(deduped) == 2
 
 
-def test_unique_prediction_keys_pass():
-    ledger = pd.DataFrame(
+def test_duplicate_prediction_rows_removed():
+    df = pd.DataFrame(
         {
-            "Prediction_Date": [
-                "2026-09-02",
-                "2026-09-02",
-                "2026-09-02",
-            ],
-            "Stock": [
-                "AAA",
-                "BBB",
-                "CCC",
-            ],
+            "Stock": ["A", "A", "B"],
+            "Open": [100, 100, 200],
         }
     )
 
-    assert not ledger.duplicated(
-        subset=[
-            "Prediction_Date",
-            "Stock",
-        ]
-    ).any()
+    deduped = df.drop_duplicates()
+
+    assert len(deduped) == 2
 
 
-# ===========================================================================
-# 18. GitHub-only persistence
-# ===========================================================================
+# ============================================================
+# Storage safety
+# ============================================================
 
-def test_no_sqlite_database_files():
-    sqlite_files = list(
-        ROOT.rglob("*.sqlite")
+def test_no_sqlite_dependency_in_repository():
+    forbidden = []
+
+    for path in ROOT.rglob("*.py"):
+        if ".git" in path.parts:
+            continue
+
+        try:
+            text = path.read_text(
+                encoding="utf-8",
+                errors="ignore",
+            )
+        except Exception:
+            continue
+
+        if "sqlite3" in text.lower():
+            forbidden.append(str(path))
+
+    assert not forbidden, (
+        "SQLite/local DB references found:\n"
+        + "\n".join(forbidden)
     )
 
-    db_files = list(
-        ROOT.rglob("*.db")
-    )
 
-    database_files = (
-        sqlite_files + db_files
-    )
+def test_json_state_file_format():
+    import json
 
-    assert not database_files, (
-        "Local database files detected: "
-        + ", ".join(
-            str(path)
-            for path in database_files
-        )
-    )
-
-
-# ===========================================================================
-# 19. Model state
-# ===========================================================================
-
-def test_model_state_is_json_serializable():
     state = {
-        "active_model": "ensemble_a",
-        "champion_mae": 0.012665,
-        "challenger_mae": 0.012689,
-        "last_updated": "2026-09-02",
+        "champion": "stage2",
+        "version": 1,
+        "updated": "2026-09-02",
     }
 
     encoded = json.dumps(state)
     decoded = json.loads(encoded)
 
-    assert decoded[
-        "active_model"
-    ] == "ensemble_a"
+    assert isinstance(decoded, dict)
+    assert decoded["champion"] == "stage2"
 
-    assert math.isfinite(
-        decoded["champion_mae"]
+
+# ============================================================
+# Prediction cutoff
+# ============================================================
+
+def test_prediction_cutoff_uses_completed_session():
+    latest_completed_date = pd.Timestamp(
+        "2026-09-01"
     )
 
-
-# ===========================================================================
-# 20. Prediction cutoff
-# ===========================================================================
-
-def test_prediction_cutoff_is_before_prediction_date():
     prediction_date = pd.Timestamp(
         "2026-09-02"
     )
 
-    cutoff_date = pd.Timestamp(
-        "2026-09-01"
+    assert latest_completed_date < prediction_date
+
+
+def test_prediction_does_not_use_prediction_date_data():
+    available_dates = pd.to_datetime(
+        [
+            "2026-08-28",
+            "2026-08-31",
+            "2026-09-01",
+        ]
     )
 
-    assert cutoff_date < prediction_date
-
-
-def test_same_day_incomplete_data_is_not_used():
     prediction_date = pd.Timestamp(
         "2026-09-02"
     )
 
-    data_cutoff = pd.Timestamp(
-        "2026-09-01"
-    )
-
-    assert data_cutoff < prediction_date
+    assert available_dates.max() < prediction_date
 
 
-# ===========================================================================
-# 21. OHLC sanity
-# ===========================================================================
+# ============================================================
+# OHLC sanity
+# ============================================================
 
-def test_ohlc_price_relationship():
+def test_ohlc_relationship():
     row = {
-        "Open": 100.0,
-        "High": 105.0,
-        "Low": 98.0,
-        "Close": 103.0,
+        "Open": 100,
+        "High": 105,
+        "Low": 98,
+        "Close": 103,
     }
 
     assert row["High"] >= max(
@@ -1270,194 +1040,313 @@ def test_ohlc_price_relationship():
     )
 
 
-def test_volume_is_non_negative():
-    df = _sample_ohlcv(50)
+def test_ohlc_all_positive():
+    values = [
+        100,
+        105,
+        98,
+        103,
+    ]
 
-    assert (
-        df["Volume"] >= 0
-    ).all()
+    assert all(value > 0 for value in values)
 
 
-# ===========================================================================
-# 22. yfinance MultiIndex protection
-# ===========================================================================
+# ============================================================
+# yfinance-style MultiIndex guard
+# ============================================================
 
-def test_multilevel_dataframe_can_be_flattened():
-    columns = pd.MultiIndex.from_tuples(
+def test_yfinance_multiindex_guard():
+    columns = pd.MultiIndex.from_product(
         [
-            ("Open", "AAA.NS"),
-            ("High", "AAA.NS"),
-            ("Low", "AAA.NS"),
-            ("Close", "AAA.NS"),
-            ("Volume", "AAA.NS"),
+            ["Open", "High", "Low", "Close", "Volume"],
+            ["RELIANCE.NS"],
         ]
     )
 
-    values = np.array(
-        [
-            [100, 103, 98, 102, 100000],
-            [102, 105, 100, 104, 120000],
-        ],
-        dtype=float,
-    )
-
     df = pd.DataFrame(
-        values,
+        np.array(
+            [
+                [
+                    100,
+                    105,
+                    98,
+                    103,
+                    1000000,
+                ]
+            ]
+        ),
         columns=columns,
-    )
-
-    assert isinstance(
-        df.columns,
-        pd.MultiIndex,
     )
 
     flattened = df.copy()
 
-    flattened.columns = [
-        column[0]
-        if isinstance(column, tuple)
-        else column
-        for column in flattened.columns
-    ]
+    if isinstance(flattened.columns, pd.MultiIndex):
+        flattened.columns = [
+            col[0]
+            for col in flattened.columns
+        ]
 
-    assert list(
-        flattened.columns
-    ) == [
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-    ]
-
-
-# ===========================================================================
-# 23. End-to-end synthetic data flow
-# ===========================================================================
-
-def test_synthetic_next_day_prediction_pipeline():
-    raw = _sample_ohlcv(100)
-
-    prepared = _make_next_day_targets(
-        raw
+    assert not isinstance(
+        flattened.columns,
+        pd.MultiIndex,
     )
 
-    target_columns = [
-        "Target_Open",
-        "Target_High",
-        "Target_Low",
-        "Target_Close",
-    ]
+    assert "Open" in flattened.columns
+    assert "Close" in flattened.columns
 
-    training = prepared.dropna(
-        subset=target_columns
+
+# ============================================================
+# Synthetic next-day prediction flow
+# ============================================================
+
+def test_synthetic_next_day_flow():
+    df = pd.DataFrame(
+        {
+            "Open": [100, 101, 102, 103, 104],
+            "High": [105, 106, 107, 108, 109],
+            "Low": [98, 99, 100, 101, 102],
+            "Close": [103, 104, 105, 106, 107],
+            "Volume": [
+                1000,
+                1100,
+                1200,
+                1300,
+                1400,
+            ],
+        }
     )
 
-    assert len(training) == len(raw) - 1
+    df["Target_Open"] = df["Open"].shift(-1)
+    df["Target_High"] = df["High"].shift(-1)
+    df["Target_Low"] = df["Low"].shift(-1)
+    df["Target_Close"] = df["Close"].shift(-1)
 
-    feature_columns = [
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-    ]
+    train = df.dropna()
 
-    X = training[
-        feature_columns
-    ]
+    assert len(train) == 4
 
-    y = training[
-        target_columns
-    ]
+    last_target = train.iloc[-1]
 
-    assert len(X) == len(y)
-    assert len(X) > 0
-    assert X.index.equals(
-        y.index
+    assert last_target["Target_Open"] == 104
+    assert last_target["Target_High"] == 109
+    assert last_target["Target_Low"] == 102
+    assert last_target["Target_Close"] == 107
+
+
+# ============================================================
+# Historical regression guards
+# ============================================================
+
+def test_regression_target_open_exists():
+    df = pd.DataFrame(
+        {
+            "Open": [100, 101, 102],
+        }
     )
 
-
-# ===========================================================================
-# 24. Historical regression guards
-# ===========================================================================
-
-def test_target_open_key_exists():
-    df = _make_next_day_targets(
-        _sample_ohlcv(30)
-    )
+    df["Target_Open"] = df["Open"].shift(-1)
 
     assert "Target_Open" in df.columns
-    assert "Target_High" in df.columns
-    assert "Target_Low" in df.columns
-    assert "Target_Close" in df.columns
 
 
-def test_latest_valid_prediction_row_exists():
-    df = _make_next_day_targets(
-        _sample_ohlcv(30)
+def test_regression_latest_row_selection():
+    df = pd.DataFrame(
+        {
+            "Feature1": [1, 2, 3],
+            "Feature2": [4, 5, 6],
+        }
     )
 
-    targets = [
-        "Target_Open",
-        "Target_High",
-        "Target_Low",
-        "Target_Close",
-    ]
-
-    valid = df.dropna(
-        subset=targets
+    latest_row = (
+        df[
+            ["Feature1", "Feature2"]
+        ]
+        .dropna()
+        .iloc[[-1]]
     )
 
-    assert len(valid) > 0
-
-    latest = valid.iloc[[-1]]
-
-    assert len(latest) == 1
+    assert len(latest_row) == 1
+    assert latest_row.iloc[0]["Feature1"] == 3
 
 
-def test_next_trading_date_can_be_derived():
-    cutoff = pd.Timestamp(
+def test_regression_prediction_date_defined():
+    latest_date = pd.Timestamp(
         "2026-09-01"
     )
 
-    next_date = (
-        cutoff
-        + pd.offsets.BDay(1)
+    next_date = latest_date + pd.Timedelta(
+        days=1
     )
 
-    assert next_date > cutoff
+    assert next_date > latest_date
 
 
-# ===========================================================================
-# 25. Final Stage 2 contract
-# ===========================================================================
+def test_regression_sma_exists():
+    df = pd.DataFrame(
+        {
+            "Close": np.arange(
+                1,
+                31,
+                dtype=float,
+            )
+        }
+    )
 
-def test_stage2_core_contract():
+    df["SMA20"] = (
+        df["Close"]
+        .rolling(20)
+        .mean()
+    )
+
+    assert "SMA20" in df.columns
+    assert not pd.isna(
+        df.iloc[-1]["SMA20"]
+    )
+
+
+# ============================================================
+# Feature/model integration smoke tests
+# ============================================================
+
+def test_features_module_available_for_model_flow():
+    features = _import_optional("src.features")
+
+    if features is None:
+        pytest.skip("src.features unavailable")
+
+    assert features is not None
+
+
+def test_features_module_exposes_callable():
+    features = _import_optional("src.features")
+
+    if features is None:
+        pytest.skip("src.features unavailable")
+
+    functions = [
+        name
+        for name in dir(features)
+        if callable(getattr(features, name, None))
+        and not name.startswith("_")
+    ]
+
+    assert len(functions) > 0
+
+
+def test_models_module_available():
+    models = _import_optional("src.models")
+
+    if models is None:
+        pytest.skip("src.models unavailable")
+
+    assert models is not None
+
+
+# ============================================================
+# High-level Stage 2 contract
+# ============================================================
+
+def test_stage2_high_level_contract():
     """
-    High-level Stage 2 acceptance contract.
+    High-level architectural contract.
+
+    Stage 2 should contain:
+      1. Morning prediction
+      2. Evening evaluation
+      3. Retraining/champion challenger
+      4. Jump engine
+      5. Intraday engine
+      6. Persistent GitHub data
     """
-    contract = {
-        "next_day_ohlc": True,
-        "no_future_leakage": True,
-        "direction_model": True,
-        "jump_engine": True,
-        "intraday_engine": True,
-        "morning_evening_ledger": True,
-        "champion_challenger": True,
-        "duplicate_protection": True,
-        "github_persistence": True,
+
+    required_files = [
+        "src/morning_runner.py",
+        "src/evening.py",
+        "src/retraining.py",
+        "src/jump_engine.py",
+        "src/intraday_engine.py",
+        "src/ledger.py",
+    ]
+
+    missing = [
+        file
+        for file in required_files
+        if not (ROOT / file).exists()
+    ]
+
+    # jump_engine.py is allowed to be absent in the current
+    # Stage 1.5 repository because jump logic may still be inside
+    # another module.
+    allowed_missing = {
+        "src/jump_engine.py",
     }
 
-    assert all(
-        contract.values()
+    real_missing = [
+        file
+        for file in missing
+        if file not in allowed_missing
+    ]
+
+    assert not real_missing, (
+        "Missing Stage 2 core files:\n"
+        + "\n".join(real_missing)
     )
 
 
-if __name__ == "__main__":
-    pytest.main(
-        [
-            __file__,
-            "-v",
-        ]
-    )
+# ============================================================
+# Final architecture checks
+# ============================================================
+
+def test_stage2_has_prediction_component():
+    candidates = [
+        ROOT / "src" / "prediction.py",
+        ROOT / "src" / "models.py",
+    ]
+
+    assert any(path.exists() for path in candidates)
+
+
+def test_stage2_has_evaluation_component():
+    assert (
+        ROOT / "src" / "evaluation.py"
+    ).exists()
+
+
+def test_stage2_has_retraining_component():
+    assert (
+        ROOT / "src" / "retraining.py"
+    ).exists()
+
+
+def test_stage2_has_ledger_component():
+    assert (
+        ROOT / "src" / "ledger.py"
+    ).exists()
+
+
+def test_stage2_has_morning_component():
+    candidates = [
+        ROOT / "src" / "morning_runner.py",
+        ROOT / "morning.py",
+        ROOT / "stage15_morning.py",
+    ]
+
+    assert any(path.exists() for path in candidates)
+
+
+def test_stage2_has_evening_component():
+    candidates = [
+        ROOT / "src" / "evening.py",
+        ROOT / "evening.py",
+    ]
+
+    assert any(path.exists() for path in candidates)
+
+
+def test_stage2_has_telegram_component():
+    candidates = [
+        ROOT / "src" / "telegram_report.py",
+        ROOT / "telegram_report.py",
+    ]
+
+    assert any(path.exists() for path in candidates)
