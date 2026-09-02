@@ -1,4 +1,4 @@
-name: Stage 2 Evening Evaluation
+name: Stage 4 Evening Evaluation
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: stage2-evening
+  group: stage4-evening
   cancel-in-progress: false
 
 permissions:
@@ -34,7 +34,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Stage 2 evening engine
+      # STAGE 4: evaluate the exact morning ledger and learn from actuals.
+      # Sector/price-bucket selection is intentionally NOT repeated here.
+      - name: Run Stage 4 evening engine
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -42,15 +44,15 @@ jobs:
         run: |
           python -m src.evening
 
-      - name: Commit Stage 2 data
+      - name: Commit Stage 4 data
         run: |
           git config user.name "stocks-ai-predictor"
           git config user.email "actions@github.com"
           git add data/stage2/
           if git diff --cached --quiet; then
-            echo "No Stage 2 data changes."
+            echo "No Stage 4 data changes."
             exit 0
           fi
-          git commit -m "Stage 2 evening evaluation and learning"
+          git commit -m "Stage 4 evening evaluation and learning"
           git pull --rebase origin main || true
           git push
