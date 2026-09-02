@@ -87,12 +87,15 @@ def morning_report(
     if jump_watchlist is not None and not jump_watchlist.empty:
         rows = []
         for i, (_, row) in enumerate(jump_watchlist.iterrows(), 1):
+            current_price = float(row["Current_Price"])
+            target_level = float(row["Target_Level"])
+            target_upside = ((target_level / current_price) - 1) * 100 if current_price else 0.0
             rows.append([
                 i,
                 row["Symbol"],
-                format_money(row["Current_Price"]),
-                format_money(row["Target_Level"]),
-                format_percent(row["Estimated_7D_Upside"]),
+                format_money(current_price),
+                format_money(target_level),
+                format_percent(target_upside),
                 f"{row['Jump_Probability']:.0f}%",
             ])
         lines += [
