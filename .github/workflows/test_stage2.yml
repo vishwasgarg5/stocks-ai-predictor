@@ -38,23 +38,35 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      - name: Verify test environment
+        run: |
+          echo "Python:"
+          python --version
+
+          echo "Pytest:"
+          pytest --version
+
+          echo "Working directory:"
+          pwd
+
+          echo "Repository contents:"
+          ls -la
+
+          echo "Tests directory:"
+          ls -la tests
+
+          test -f tests/test_stage2.py
+
       - name: Compile Python source
         run: |
           python -m compileall -q src tests
+
+      - name: Collect Stage 2 tests
+        run: |
+          pytest --collect-only -q tests/test_stage2.py
 
       - name: Run Stage 2 tests
         env:
           PYTHONUNBUFFERED: "1"
         run: |
           pytest -q tests/test_stage2.py -ra
-
-      - name: Report failure
-        if: failure()
-        run: |
-          echo "❌ Stage 2 test suite failed."
-          echo "Review the pytest output above."
-
-      - name: Report success
-        if: success()
-        run: |
-          echo "✅ Stage 2 test suite passed."
