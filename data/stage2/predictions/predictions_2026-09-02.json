@@ -1,0 +1,14 @@
+{
+  "Stage": "Stage 2",
+  "PredictionDate": "2026-09-02",
+  "DataCutoff": "2026-09-01",
+  "ModelVariant": "A",
+  "Regime": "SIDEWAYS",
+  "SelectedStocks": [
+    "POLICYBZR",
+    "DIVISLAB",
+    "BPCL",
+    "JINDALSTEL",
+    "UNIONBANK"
+  ]
+}
