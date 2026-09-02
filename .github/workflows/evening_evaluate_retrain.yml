@@ -1,42 +1,61 @@
-name: NIFTY 150 Evening Evaluate and Retrain
+name: Stage 2 Evening Evaluation
 
 on:
-  workflow_dispatch:
   schedule:
-    # 11:00 UTC = 16:30 IST: one hour after NSE cash-market close.
-    - cron: "0 11 * * 1-5"
+    - cron: "30 16 * * 1-5"
+      timezone: "Asia/Kolkata"
+
+  workflow_dispatch:
+
+concurrency:
+  group: stage2-evening
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
-concurrency:
-  group: nifty150-daily-pipeline
-  cancel-in-progress: false
-
-env:
-  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
 jobs:
-  evaluate:
+  evaluation:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-      - run: pip install -r requirements.txt
-      - name: Evaluate today's predictions and retrain only if challenger wins
-        run: python evening.py
-      - name: Commit evaluation, Nifty 150 cache, and model
+
+      - name: Install dependencies
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data reports models
-          if git diff --cached --quiet; then echo "No evening evaluation/model changes."; exit 0; fi
-          git commit -m "chore: evaluate predictions and update champion"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Stage 2 evening engine
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python -m src.evening
+
+      - name: Commit Stage 2 data
+        run: |
+          git config user.name "stocks-ai-predictor"
+          git config user.email "actions@github.com"
+
+          git add data/stage2/
+
+          if git diff --cached --quiet; then
+            echo "No Stage 2 data changes."
+            exit 0
+          fi
+
+          git commit -m "Stage 2 evening evaluation and learning"
+
+          git pull --rebase origin main || true
+
           git push
