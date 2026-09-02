@@ -2,6 +2,7 @@ name: Stage 2 Test
 
 on:
   workflow_dispatch:
+
   push:
     paths:
       - "src/**"
@@ -18,6 +19,7 @@ permissions:
 
 jobs:
   test:
+    name: Stage 2 Test Suite
     runs-on: ubuntu-latest
 
     steps:
@@ -46,7 +48,13 @@ jobs:
         run: |
           pytest -q tests/test_stage2.py -ra
 
-      - name: Test result
-        if: always()
+      - name: Report failure
+        if: failure()
         run: |
-          echo "Stage 2 workflow test completed."
+          echo "❌ Stage 2 test suite failed."
+          echo "Review the pytest output above."
+
+      - name: Report success
+        if: success()
+        run: |
+          echo "✅ Stage 2 test suite passed."
