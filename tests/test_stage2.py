@@ -7,10 +7,15 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
+# =============================================================================
+# STAGE 4 TEST SUITE
+# Easy access: this file protects both the original Stage 2 engines and the
+# new Stage 4 price-bucket + sector-ranking layer.
+# =============================================================================
 REQUIRED_SOURCE_FILES = [
     "src/__init__.py", "src/config.py", "src/features.py", "src/market_data.py",
-    "src/models.py", "src/prediction.py", "src/selection.py", "src/evaluation.py",
-    "src/retraining.py", "src/ledger.py", "src/morning_runner.py",
+    "src/models.py", "src/prediction.py", "src/selection.py", "src/stage4_engine.py",
+    "src/evaluation.py", "src/retraining.py", "src/ledger.py", "src/morning_runner.py",
     "src/telegram_report.py", "src/weekly_report.py",
 ]
 
@@ -32,7 +37,7 @@ FORBIDDEN_LEGACY_PATHS = [
 
 CORE_MODULES = [
     "src.config", "src.features", "src.market_data", "src.models", "src.prediction",
-    "src.selection", "src.evaluation", "src.retraining", "src.ledger",
+    "src.selection", "src.stage4_engine", "src.evaluation", "src.retraining", "src.ledger",
 ]
 
 
@@ -41,7 +46,7 @@ def test_required_source_files_exist():
         assert (ROOT / path).exists(), path
 
 
-def test_current_stage2_workflows_exist():
+def test_current_workflows_exist():
     for path in REQUIRED_WORKFLOWS:
         assert (ROOT / path).exists(), path
 
@@ -51,14 +56,14 @@ def test_legacy_paths_are_removed():
         assert not (ROOT / path).exists(), path
 
 
-def test_core_stage2_modules_import():
+def test_core_modules_import():
     failures = []
     for module_name in CORE_MODULES:
         try:
             importlib.import_module(module_name)
         except Exception as exc:
             failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
-    assert not failures, "Stage 2 import failures:\n" + "\n".join(failures)
+    assert not failures, "Stage 4 import failures:\n" + "\n".join(failures)
 
 
 def test_requirements_and_readme_exist():
@@ -67,10 +72,7 @@ def test_requirements_and_readme_exist():
 
 
 def test_next_session_target_alignment():
-    df = pd.DataFrame({
-        "Open": [10, 11, 12], "High": [11, 12, 13],
-        "Low": [9, 10, 11], "Close": [10.5, 11.5, 12.5],
-    })
+    df = pd.DataFrame({"Open": [10, 11, 12], "High": [11, 12, 13], "Low": [9, 10, 11], "Close": [10.5, 11.5, 12.5]})
     for column in ["Open", "High", "Low", "Close"]:
         df[f"Target_{column}"] = df[column].shift(-1)
     assert df.loc[0, "Target_Open"] == 11
@@ -112,10 +114,8 @@ def test_score_selection_returns_top_rows():
     from src.selection import select_top_stocks
     candidates = pd.DataFrame({
         "Symbol": ["AAA", "BBB", "CCC", "DDD"],
-        "TechnicalScore": [60, 95, 70, 85],
-        "Expected_Return": [1, 8, 2, 5],
-        "Confidence": [60, 95, 70, 85],
-        "Direction_Confidence": [60, 95, 70, 85],
+        "TechnicalScore": [60, 95, 70, 85], "Expected_Return": [1, 8, 2, 5],
+        "Confidence": [60, 95, 70, 85], "Direction_Confidence": [60, 95, 70, 85],
         "Direction": ["UP", "UP", "UP", "UP"],
     })
     result = select_top_stocks(candidates, top_n=3)
@@ -128,3 +128,28 @@ def test_feature_input_is_two_dimensional():
     frame = pd.DataFrame({"Close": [100, 101, 102], "Volume": [1000, 1100, 1200]})
     assert frame.ndim == 2
     assert frame.select_dtypes(include=[np.number]).shape[1] == 2
+
+
+def test_stage4_price_buckets():
+    from src.stage4_engine import price_bucket
+    assert price_bucket(1500)[0] == "B1"
+    assert price_bucket(750)[0] == "B2"
+    assert price_bucket(250)[0] == "B3"
+    assert price_bucket(75)[0] == "B4"
+    assert price_bucket(25)[0] == "B5"
+    assert price_bucket(9)[0] == "OUT"
+
+
+def test_stage4_price_bucket_selection():
+    from src.stage4_engine import select_price_bucket_candidates
+    df = pd.DataFrame({
+        "Symbol": ["A", "B", "C", "D"],
+        "PriceBucket": ["B1", "B1", "B2", "B2"],
+        "Score": [80, 90, 70, 95],
+    })
+    result = select_price_bucket_candidates(df, per_bucket=1)
+    assert set(result["Symbol"]) == {"B", "D"}
+
+
+def test_stage4_score_weights_sum_to_one():
+    assert abs(0.20 + 0.18 + 0.18 + 0.14 + 0.10 + 0.10 + 0.10 - 1.0) < 1e-9
