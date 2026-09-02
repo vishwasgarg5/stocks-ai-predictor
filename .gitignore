@@ -1,7 +1,16 @@
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+
 .venv/
 venv/
+env/
+
 .env
+
+.vscode/
+.idea/
+
 .DS_Store
-# GitHub is the persistent data store; do NOT ignore generated CSV/model files.
+Thumbs.db
