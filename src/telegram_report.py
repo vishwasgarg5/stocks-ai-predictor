@@ -4,6 +4,7 @@ import pandas as pd
 
 from .config import TELEGRAM_MAX_LENGTH
 from .utils import format_money, format_percent, split_messages
+from .selection import expected_return_score, regime_direction_score
 
 
 def send_telegram(text):
@@ -47,6 +48,18 @@ def _table(headers, rows):
     return "\n".join([body[0], separator] + body[1:])
 
 
+def _evaluation_components(row, regime):
+    """Return the same raw component scores used by final stock selection."""
+    return {
+        "Technical": float(row.get("TechnicalScore", 50)),
+        "Expected": expected_return_score(row.get("Expected_Return", 0)),
+        "Confidence": float(row.get("Confidence", 50)),
+        "Direction": float(row.get("Direction_Confidence", 50)),
+        "Reliability": float(row.get("ReliabilityScore", 50)),
+        "Regime": regime_direction_score(row.get("Direction", "NEUTRAL"), regime),
+    }
+
+
 def morning_report(
     prediction_date,
     cutoff_date,
@@ -56,6 +69,9 @@ def morning_report(
     selected,
     jump_watchlist,
     intraday,
+    universe_count=None,
+    liquid_count=None,
+    prescreen_count=None,
 ):
     lines = [
         "📈 AI NSE STOCK PREDICTION — STAGE 2",
@@ -64,6 +80,21 @@ def morning_report(
         f"Schedule: {schedule_status}",
         f"Market Regime: {regime}",
         f"Champion Model: {model_variant}",
+        "",
+        "🔎 MARKET / SCAN SUMMARY",
+        "```",
+        _table(
+            ["Item", "Value"],
+            [
+                ["Universe Loaded", universe_count if universe_count is not None else "-"],
+                ["Liquid Stocks", liquid_count if liquid_count is not None else "-"],
+                ["Technical Prescreen", prescreen_count if prescreen_count is not None else "-"],
+                ["Final Next-Day Picks", 5 if selected is not None and not selected.empty else 0],
+                ["Jump Candidates", 30 if jump_watchlist is not None and not jump_watchlist.empty else 0],
+                ["Intraday Universe", liquid_count if liquid_count is not None else "-"],
+            ],
+        ),
+        "```",
         "",
         "🎯 NEXT-DAY TOP 5",
     ]
@@ -77,6 +108,7 @@ def morning_report(
                 f"{row['Score']:.1f}",
                 row["Direction"],
                 f"{row['Direction_Confidence']:.0f}%",
+                f"{row['Expected_Return']:+.2f}%",
                 f"{row['Pred_Open']:.2f}",
                 f"{row['Pred_High']:.2f}",
                 f"{row['Pred_Low']:.2f}",
@@ -85,10 +117,31 @@ def morning_report(
         lines += [
             "```",
             _table(
-                ["#", "Stock", "Score", "Dir", "Conf", "Open", "High", "Low", "Close"],
+                ["#", "Stock", "Score", "Dir", "Conf", "Exp%", "Open", "High", "Low", "Close"],
                 rows,
             ),
             "```",
+            "",
+            "🧠 HOW TOP 5 WERE EVALUATED",
+            "```",
+            _table(
+                ["Stock", "Tech", "ExpRet", "Conf", "DirConf", "Reliab", "Regime", "Final"],
+                [
+                    [
+                        row["Symbol"],
+                        f"{_evaluation_components(row, regime)['Technical']:.0f}",
+                        f"{_evaluation_components(row, regime)['Expected']:.0f}",
+                        f"{_evaluation_components(row, regime)['Confidence']:.0f}",
+                        f"{_evaluation_components(row, regime)['Direction']:.0f}",
+                        f"{_evaluation_components(row, regime)['Reliability']:.0f}",
+                        f"{_evaluation_components(row, regime)['Regime']:.0f}",
+                        f"{row['Score']:.1f}",
+                    ]
+                    for _, row in selected.iterrows()
+                ],
+            ),
+            "```",
+            "Weights: Tech 25% | Expected Return 20% | Confidence 20% | Direction 15% | Reliability 10% | Regime 10%",
         ]
     else:
         lines.append("No next-day predictions generated.")
@@ -100,18 +153,21 @@ def morning_report(
             current_price = float(row["Current_Price"])
             target_level = float(row["Target_Level"])
             target_upside = ((target_level / current_price) - 1) * 100 if current_price else 0.0
+            expected_7d = float(row.get("Estimated_7D_Upside", 0))
             rows.append([
                 i,
                 row["Symbol"],
                 format_money(current_price),
                 format_money(target_level),
                 format_percent(target_upside),
+                format_percent(expected_7d),
                 f"{row['Jump_Probability']:.0f}%",
             ])
         lines += [
             "```",
-            _table(["#", "Stock", "CMP", "Target", "Upside", "Prob"], rows),
+            _table(["#", "Stock", "CMP", "Target", "Target%", "7D Exp%", "Prob"], rows),
             "```",
+            "Target% = distance from CMP to the +5% target level. 7D Exp% = model-estimated 7-day upside.",
         ]
     else:
         lines.append("No strong +5% candidates today.")
@@ -137,7 +193,12 @@ def morning_report(
     else:
         lines.append("No strong intraday setup today.")
 
-    lines += ["", "Stage 2 stores all prediction data for future learning."]
+    lines += [
+        "",
+        "📌 EVALUATION METHOD",
+        "Technical indicators → liquidity/data quality → technical prescreen → ML ensemble prediction → direction/confidence → reliability → market-regime adjustment → final weighted score.",
+        "Stage 2 stores all prediction data for future learning.",
+    ]
     return "\n".join(lines)
 
 
