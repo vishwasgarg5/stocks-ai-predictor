@@ -34,14 +34,24 @@ def run():
     if len(candidate_rows)<5: raise RuntimeError("Unable to generate five predictions.")
     selected=select_top_stocks(pd.DataFrame(candidate_rows),5,regime); selected["PredictionDate"]=str(prediction_date)
     save_predictions(selected,prediction_date,{"Stage":"Stage 2","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"Regime":regime,"SelectedStocks":selected["Symbol"].tolist()})
-    # Jump engine receives the strongest prescreened candidates, but is stored separately.
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map}
     jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty: save_jump_predictions(jump_watchlist,prediction_date)
-    # Intraday is a separate engine and scans the complete liquid universe.
     intraday=generate_intraday_watchlist(list(data_map.keys()))
     if not intraday.empty: save_intraday_predictions(intraday,prediction_date)
-    report=morning_report(prediction_date,cutoff_date,schedule_status("morning"),regime,variant,selected,jump_watchlist,intraday)
+    report=morning_report(
+        prediction_date,
+        cutoff_date,
+        schedule_status("morning"),
+        regime,
+        variant,
+        selected,
+        jump_watchlist,
+        intraday,
+        universe_count=len(universe),
+        liquid_count=len(data_map),
+        prescreen_count=len(candidate_symbols),
+    )
     send_telegram(report); print(report)
 
 if __name__=="__main__": run()
