@@ -2,8 +2,7 @@ name: Final Stage 10 Morning Prediction
 
 on:
   schedule:
-    - cron: "0 5 * * 1-5"
-      timezone: "Asia/Kolkata"
+    - cron: "45 2 * * 1-5"   # 08:15 IST (GitHub Actions cron is UTC)
   workflow_dispatch:
 
 concurrency:
@@ -42,5 +41,5 @@ jobs:
           git add data/stage2/
           if git diff --cached --quiet; then echo "No data changes."; exit 0; fi
           git commit -m "Final Stage 10 morning prediction"
-          git pull --rebase origin main || true
+          git pull --rebase origin main || exit 1
           git push
