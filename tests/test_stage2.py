@@ -3,10 +3,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]
-REQUIRED_SOURCE_FILES=["src/__init__.py","src/config.py","src/features.py","src/market_data.py","src/models.py","src/prediction.py","src/multihorizon.py","src/selection.py","src/stage4_engine.py","src/stage45_engine.py","src/evaluation.py","src/retraining.py","src/ledger.py","src/morning_runner.py","src/telegram_report.py","src/weekly_report.py"]
+REQUIRED_SOURCE_FILES=["src/__init__.py","src/config.py","src/features.py","src/market_data.py","src/models.py","src/prediction.py","src/multihorizon.py","src/selection.py","src/stage4_engine.py","src/stage45_engine.py","src/final_intelligence.py","src/evaluation.py","src/retraining.py","src/ledger.py","src/morning_runner.py","src/telegram_report.py","src/weekly_report.py"]
 REQUIRED_WORKFLOWS=[".github/workflows/stage2_morning.yml",".github/workflows/stage2_evening.yml",".github/workflows/stage2_weekly.yml"]
 FORBIDDEN_LEGACY_PATHS=[".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv"]
-CORE_MODULES=["src.config","src.features","src.market_data","src.models","src.prediction","src.multihorizon","src.selection","src.stage4_engine","src.stage45_engine","src.evaluation","src.retraining","src.ledger"]
+CORE_MODULES=["src.config","src.features","src.market_data","src.models","src.prediction","src.multihorizon","src.selection","src.stage4_engine","src.stage45_engine","src.final_intelligence","src.evaluation","src.retraining","src.ledger"]
 
 def test_required_source_files_exist():
     for path in REQUIRED_SOURCE_FILES: assert (ROOT/path).exists(),path
@@ -22,7 +22,7 @@ def test_core_modules_import():
     for name in CORE_MODULES:
         try: importlib.import_module(name)
         except Exception as exc: failures.append(f"{name}: {type(exc).__name__}: {exc}")
-    assert not failures,"Stage 4.5 import failures:\n"+"\n".join(failures)
+    assert not failures,"Final-stage import failures:\n"+"\n".join(failures)
 
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
@@ -83,6 +83,24 @@ def test_stage3b_horizon_targets_are_future_only():
 def test_ohlc_targets_are_defined():
     from src.models import TARGETS
     assert TARGETS==["Open","High","Low","Close"]
+
+def test_final_manifest_contains_all_stages():
+    from src.final_intelligence import final_stage_manifest
+    m=final_stage_manifest(); assert set(m["SubStages"])=={"5","6","7","8","9","10"}
+    assert all(len(m["SubStages"][k])>=8 for k in m["SubStages"])
+
+def test_confidence_calibration_is_bounded():
+    from src.final_intelligence import calibrate_confidence
+    assert 0<=calibrate_confidence(120,20,100)<=100
+
+def test_prediction_interval_ordering():
+    from src.final_intelligence import prediction_interval
+    x=prediction_interval({"Pred_Close":100,"PredictionUncertaintyPct":5}); assert x["BearCase"]<=x["BaseCase"]<=x["BullCase"]
+
+def test_final_action_is_deterministic():
+    from src.final_intelligence import final_action
+    assert final_action({"FinalDecisionScore":90,"Direction":"UP"})=="BUY"
+    assert final_action({"FinalDecisionScore":20,"Direction":"DOWN"})=="AVOID"
 
 def test_morning_report_has_exactly_three_sections():
     from src.telegram_report import morning_report
