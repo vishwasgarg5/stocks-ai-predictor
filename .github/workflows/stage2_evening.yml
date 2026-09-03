@@ -1,14 +1,13 @@
-name: Stage 4 Evening Evaluation
+name: Final Stage 10 Evening Evaluation & Learning
 
 on:
   schedule:
     - cron: "30 16 * * 1-5"
       timezone: "Asia/Kolkata"
-
   workflow_dispatch:
 
 concurrency:
-  group: stage4-evening
+  group: final-stage-evening
   cancel-in-progress: false
 
 permissions:
@@ -17,42 +16,31 @@ permissions:
 jobs:
   evaluation:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      # STAGE 4: evaluate the exact morning ledger and learn from actuals.
-      # Sector/price-bucket selection is intentionally NOT repeated here.
-      - name: Run Stage 4 evening engine
+      - name: Run final evaluation and learning engine
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PYTHONUNBUFFERED: "1"
-        run: |
-          python -m src.evening
-
-      - name: Commit Stage 4 data
+        run: python -m src.evening
+      - name: Commit final GitHub state
         run: |
           git config user.name "stocks-ai-predictor"
           git config user.email "actions@github.com"
           git add data/stage2/
-          if git diff --cached --quiet; then
-            echo "No Stage 4 data changes."
-            exit 0
-          fi
-          git commit -m "Stage 4 evening evaluation and learning"
+          if git diff --cached --quiet; then echo "No data changes."; exit 0; fi
+          git commit -m "Final Stage 10 evening evaluation"
           git pull --rebase origin main || true
           git push
