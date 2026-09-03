@@ -1,10 +1,11 @@
 """Evening evaluation, bucket performance, Stage 10 learning and portfolio report."""
 import numpy as np
 import pandas as pd
-from .config import HISTORY_PERIOD
+from .config import HISTORY_PERIOD,FINAL_LEARNING_STATE_FILE
 from .market_data import get_completed_session_date,get_previous_session_date,download_many,get_row_for_date,get_previous_row
 from .ledger import load_predictions,evaluation_exists,save_evaluation,append_daily_metrics,rebuild_stock_reliability,latest_prediction_date
 from .retraining import compare_variants
+from .final_intelligence import update_learning_state
 from .telegram_report import send_telegram,evening_report
 from .portfolio_report import portfolio_snapshot
 from .report_metrics import model_report_metrics
@@ -64,6 +65,9 @@ def run():
     previous_metrics=calculate_cumulative_metrics(exclude_market_date=market_date);previous_accuracy=_model_accuracy(previous_metrics);evaluation=pd.DataFrame(rows);save_evaluation(evaluation,market_date);metrics=calculate_cumulative_metrics();current_accuracy=_model_accuracy(metrics);append_daily_metrics({"MarketDate":str(market_date),**metrics,"ModelAccuracy":current_accuracy});rebuild_stock_reliability()
     previous_session=get_previous_session_date(market_date);retraining={"Retrained":False,"Decision":"NO PREVIOUS SESSION"}
     if previous_session is not None:retraining=compare_variants(download_many(symbols,HISTORY_PERIOD,workers=5),symbols,previous_session)
-    bucket=_bucket_metrics(evaluation,predictions);accuracy=model_report_metrics();accuracy.update({"PreviousAccuracy":previous_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0)});p=_portfolio_payload();report=evening_report(market_date,evaluation,metrics,retraining,bucket_metrics=bucket,learning={"status":"UPDATED"},scan={"Universe":len(symbols),"Data":len(data_map),"Liquid":len(data_map),"AI":len(symbols),"Selected":len(evaluation)},accuracy=accuracy,portfolio=p);send_telegram(report);print(report)
+    bucket=_bucket_metrics(evaluation,predictions);accuracy=model_report_metrics();accuracy.update({"PreviousAccuracy":previous_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0)})
+    # Persist observed performance, drift/health and champion decision together.
+    update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(market_date),"prediction_date":str(prediction_date),"metrics":metrics,"accuracy":accuracy,"retraining":retraining,"bucket_metrics":bucket,"symbols_evaluated":symbols})
+    p=_portfolio_payload();report=evening_report(market_date,evaluation,metrics,retraining,bucket_metrics=bucket,learning={"status":"UPDATED","drift":accuracy.get("Drift"),"health":accuracy.get("Health")},scan={"Universe":len(symbols),"Data":len(data_map),"Liquid":len(data_map),"AI":len(symbols),"Selected":len(evaluation)},accuracy=accuracy,portfolio=p);send_telegram(report);print(report)
 
 if __name__=="__main__":run()
