@@ -39,10 +39,16 @@ def direction_return_alignment(direction,expected_return):
 
 
 def horizon_alignment(row):
+    """Measure whether multi-horizon forecasts agree with the primary direction."""
     values=[]
     for h in (1,3,5,7,20):
-        key=f"Horizon_{h}D"
-        if key in row and pd.notna(row[key]): values.append(float(row[key]))
+        keys=(f"H{h}D_Return",f"Horizon_{h}D")
+        value=None
+        for key in keys:
+            if key in row and pd.notna(row[key]): value=row[key]; break
+        if value is not None:
+            try: values.append(float(value))
+            except (TypeError,ValueError): pass
     if not values: return 50.0
     direction=str(row.get("Direction","NEUTRAL")).upper()
     if direction=="UP": agreeing=sum(v>0 for v in values)
@@ -53,13 +59,7 @@ def horizon_alignment(row):
 
 def calculate_trade_confidence(row):
     """Separate trade quality from raw model confidence and penalize signal conflicts."""
-    return clamp(
-        0.30*float(row.get("Confidence",50))
-        +0.15*float(row.get("Direction_Confidence",50))
-        +0.40*direction_return_alignment(row.get("Direction","NEUTRAL"),row.get("Expected_Return",0))
-        +0.05*float(row.get("ReliabilityScore",50))
-        +0.10*horizon_alignment(row)
-    )
+    return clamp(0.30*float(row.get("Confidence",50))+0.15*float(row.get("Direction_Confidence",50))+0.40*direction_return_alignment(row.get("Direction","NEUTRAL"),row.get("Expected_Return",0))+0.05*float(row.get("ReliabilityScore",50))+0.10*horizon_alignment(row))
 
 
 def calculate_score(row,regime):
@@ -68,7 +68,10 @@ def calculate_score(row,regime):
 
 def score_candidates(candidates,regime="SIDEWAYS"):
     if candidates is None or candidates.empty: return pd.DataFrame()
-    df=candidates.copy(); reliability=load_reliability(); df["ReliabilityScore"]=df["Symbol"].map(reliability).fillna(50.0)
+    df=candidates.copy()
+    if "SectorScore" not in df.columns: df["SectorScore"]=50.0
+    if "MultiHorizonExpectedReturn" not in df.columns: df["MultiHorizonExpectedReturn"]=0.0
+    reliability=load_reliability(); df["ReliabilityScore"]=df["Symbol"].map(reliability).fillna(50.0)
     df["TradeConfidence"]=df.apply(calculate_trade_confidence,axis=1)
     df["TradeQuality"]=df["TradeConfidence"].map(lambda x:"HIGH" if x>=75 else "MEDIUM" if x>=60 else "LOW")
     df["DirectionReturnAlignment"]=df.apply(lambda r:direction_return_alignment(r.get("Direction","NEUTRAL"),r.get("Expected_Return",0)),axis=1)
