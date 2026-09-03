@@ -62,9 +62,9 @@ def test_stage3b_horizon_targets_are_future_only():
     for h in [1,3,5]:
         target=close.shift(-h); assert target.iloc[0]==close.iloc[h] and pd.isna(target.iloc[-h:]).all()
 
-def test_ohlcv_targets_are_defined():
+def test_ohlc_targets_are_defined():
     from src.models import TARGETS
-    assert TARGETS==["Open","High","Low","Close","Volume"]
+    assert TARGETS==["Open","High","Low","Close"]
 
 def test_morning_report_has_exactly_three_sections():
     from src.telegram_report import morning_report
