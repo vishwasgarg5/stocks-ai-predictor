@@ -1,6 +1,6 @@
 """Stage 4.5 final stock selection: price bucket + sector + horizon + uncertainty + risk."""
 import pandas as pd
-from .config import STOCK_RELIABILITY_FILE
+from .config import STOCK_RELIABILITY_FILE,MAX_PREDICTION_UNCERTAINTY,TOP_N
 from .utils import clamp
 
 
@@ -72,11 +72,11 @@ def score_candidates(candidates,regime="SIDEWAYS"):
     return df.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence","SectorScore"],ascending=False).reset_index(drop=True)
 
 
-def select_top_stocks(candidates,top_n=10,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=2):
+def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=2):
     scored=score_candidates(candidates,regime)
     if scored.empty: return scored
     qualified=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=35.0)].copy()
-    if "PredictionUncertaintyPct" in qualified.columns: qualified=qualified[qualified["PredictionUncertaintyPct"]<=10.0]
+    if "PredictionUncertaintyPct" in qualified.columns: qualified=qualified[qualified["PredictionUncertaintyPct"]<=MAX_PREDICTION_UNCERTAINTY]
     if qualified.empty: return qualified.reset_index(drop=True)
     pieces=[]
     for _,group in qualified.groupby("PriceBucket",sort=False): pieces.append(group.sort_values(["TradeConfidence","Score"],ascending=False).head(max_per_bucket))
