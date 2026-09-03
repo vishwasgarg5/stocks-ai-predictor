@@ -8,11 +8,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: final-stage-regression
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,12 +25,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
       - name: Verify project imports
-        run: python -c "import src; import src.final_intelligence; print('final Stage 10 imports OK')"
+        run: python -c "import src; import src.final_intelligence; import src.morning_runner; import src.evening; print('Final Stage 10 imports OK')"
+      - name: Compile source and tests
+        run: python -m compileall -q src tests
       - name: Run full regression suite
         run: python -m pytest -q
