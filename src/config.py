@@ -1,26 +1,16 @@
 from pathlib import Path
 
-# =============================================================================
-# CORE PATHS — GitHub-only persistence. No local database is used.
-# =============================================================================
 ROOT=Path(__file__).resolve().parents[1]; DATA_DIR=ROOT/"data"; STAGE2_DIR=DATA_DIR/"stage2"
 PREDICTIONS_DIR=STAGE2_DIR/"predictions"; EVALUATIONS_DIR=STAGE2_DIR/"evaluations"; JUMP_DIR=STAGE2_DIR/"jump"; INTRADAY_DIR=STAGE2_DIR/"intraday"; METRICS_DIR=STAGE2_DIR/"metrics"; STATE_DIR=STAGE2_DIR/"state"
 for directory in [PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,METRICS_DIR,STATE_DIR]: directory.mkdir(parents=True,exist_ok=True)
 
-# =============================================================================
-# STAGE 4 — TRUE COMBINED RELEASE
-# Includes Stage 3A price buckets + Stage 3B multi-horizon + Stage 4 sector intelligence.
-# Easy access: stage/version and bucket settings are maintained here.
-# =============================================================================
-STAGE_NAME="Stage 4 (3A+3B+4)"; MODEL_VERSION="stage4-v4.1"
+# STAGE 4.2 — production combined release: 3A price buckets + 3B horizons + sector intelligence.
+STAGE_NAME="Stage 4.2 (3A+3B+4)"; MODEL_VERSION="stage4-v4.2"
 STAGE4_SECTOR_MAP_FILE=METRICS_DIR/"sector_map.csv"
 PRICE_BUCKET_NAMES=[">1000","500-999","100-499","50-99","10-49"]
-MULTI_HORIZONS=(1,3,5,7,20)
-TOP_N=5
+MULTI_HORIZONS=(1,3,5,7,20); TOP_N=5
 
-# DATA / UNIVERSE
 MAX_UNIVERSE=1000; PRESCREEN_N=60; HISTORY_PERIOD="2y"; MIN_HISTORY_ROWS=180; MIN_AVG_TRADED_VALUE=20_000_000; MIN_PRICE=10; VALIDATION_FRACTION=0.20; MIN_RELATIVE_IMPROVEMENT=0.02
-# Stage 2 engines retained
 JUMP_THRESHOLD=0.05; JUMP_HORIZON_DAYS=7; JUMP_TOP_N=5; JUMP_CANDIDATE_N=30; MIN_JUMP_CONFIDENCE=50
 INTRADAY_TOP_N=5; INTRADAY_PERIOD="5d"; INTRADAY_INTERVAL="15m"; INTRADAY_MIN_ROWS=80; INTRADAY_MIN_MOVE=0.012; NIFTY_SYMBOL="^NSEI"
 UNIVERSE_FILES=[DATA_DIR/"universe.csv",DATA_DIR/"nifty150_symbols.csv",DATA_DIR/"nifty150.csv",DATA_DIR/"nifty150_list.csv"]
