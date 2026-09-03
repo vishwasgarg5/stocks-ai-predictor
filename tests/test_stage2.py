@@ -40,8 +40,23 @@ def test_ensemble_weights_sum_to_one(): assert abs(sum({"XGB":.4,"RF":.3,"ET":.3
 
 def test_quality_selection_never_pads_to_five():
     from src.selection import select_top_stocks
-    d=pd.DataFrame({"Symbol":["AAA","BBB","CCC"],"TechnicalScore":[90,70,60],"Expected_Return":[8,2,-1],"Confidence":[90,70,55],"Direction_Confidence":[90,70,55],"Direction":["UP"]*3})
-    r=select_top_stocks(d,5); assert len(r)<=3 and "AAA" in set(r.Symbol)
+    d=pd.DataFrame({"Symbol":["AAA","BBB","CCC"],"TechnicalScore":[90,70,60],"Expected_Return":[8,2,-1],"Confidence":[90,70,55],"Direction_Confidence":[90,70,55],"Direction":["UP"]*3,"PriceBucket":["B1","B2","B3"]})
+    r=select_top_stocks(d,10); assert len(r)<=3 and "AAA" in set(r.Symbol)
+
+def test_two_stocks_max_per_price_bucket():
+    from src.selection import select_top_stocks
+    rows=[]
+    for i in range(4): rows.append({"Symbol":f"B1{i}","PriceBucket":"B1","TechnicalScore":95-i,"Expected_Return":5-i*.2,"Confidence":90,"Direction_Confidence":85,"Direction":"UP"})
+    for i in range(4): rows.append({"Symbol":f"B2{i}","PriceBucket":"B2","TechnicalScore":94-i,"Expected_Return":4-i*.2,"Confidence":90,"Direction_Confidence":85,"Direction":"UP"})
+    r=select_top_stocks(pd.DataFrame(rows),10)
+    assert len(r)==4 and r["PriceBucket"].value_counts().max()==2
+
+def test_direction_return_conflict_reduces_trade_confidence():
+    from src.selection import calculate_trade_confidence
+    base={"Confidence":95,"Direction_Confidence":95,"ReliabilityScore":80,"Direction":"UP","MultiHorizonExpectedReturn":5,"Horizon_1D":5,"Horizon_3D":5,"Horizon_5D":5,"Horizon_7D":5,"Horizon_20D":5}
+    aligned=calculate_trade_confidence({**base,"Expected_Return":5})
+    conflict=calculate_trade_confidence({**base,"Expected_Return":-5})
+    assert aligned>conflict and conflict<60
 
 def test_stage3a_price_buckets():
     from src.stage4_engine import price_bucket
