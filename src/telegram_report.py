@@ -4,7 +4,6 @@ Morning report intentionally contains only three actionable sections:
 2) 7-session +5% jump watchlist,
 3) intraday setups.
 Morning tables are transposed for easier mobile reading.
-Evening reporting remains unchanged for evaluation/retraining.
 """
 import os
 import requests
@@ -15,7 +14,8 @@ from .utils import format_money, format_percent, split_messages
 
 def send_telegram(text):
     token=os.getenv("TELEGRAM_BOT_TOKEN"); chat_id=os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id: print("Telegram secrets not configured."); return False
+    if not token or not chat_id:
+        print("Telegram secrets not configured."); return False
     url=f"https://api.telegram.org/bot{token}/sendMessage"; success=True
     for message in split_messages(text,TELEGRAM_MAX_LENGTH):
         try:
@@ -35,8 +35,7 @@ def _table(headers,rows):
 
 def _transpose_table(headers,rows):
     """Render records vertically: metric in first column, stocks across columns."""
-    if not rows:
-        return ""
+    if not rows: return ""
     stock_headers=[str(row[1]) for row in rows]
     output=[[headers[1]] + stock_headers]
     for col_idx in range(2,len(headers)):
@@ -45,14 +44,16 @@ def _transpose_table(headers,rows):
 
 
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
-    """Compact actionable morning report; all three tables are transposed for mobile."""
+    """Compact actionable morning report with three mobile-friendly sections."""
     lines=["📈 *AI NSE MORNING REPORT*",f"_{prediction_date} | Data: {cutoff_date}_","","🎯 *1. TOP STOCKS — PRICE BUCKET + PREDICTED OHLCV*"]
     if selected is not None and not selected.empty:
         rows=[]
         for i,(_,r) in enumerate(selected.iterrows(),1):
-            rows.append([i,r["Symbol"],r.get("PriceBucket","-"),f"{r.get('Score',0):.1f}",r.get("Direction","-"),f"{r.get('Confidence',0):.0f}%",format_money(r["Pred_Open"]),format_money(r["Pred_High"]),format_money(r["Pred_Low"]),format_money(r["Pred_Close"]),f"{float(r.get('Pred_Volume',0)):,.0f}"])
-        lines += ["```",_transpose_table(["#","Stock","Bucket","Score","Dir","Conf","Open","High","Low","Close","Volume"],rows),"```"]
-    else: lines.append("No qualifying bucket-based stock today.")
+            quality=str(r.get("TradeQuality","-"))
+            rows.append([i,r["Symbol"],r.get("PriceBucket","-"),f"{r.get('Score',0):.1f}",r.get("Direction","-"),f"{r.get('Confidence',0):.0f}%",f"{r.get('TradeConfidence',0):.0f}% {quality}",format_money(r["Pred_Open"]),format_money(r["Pred_High"]),format_money(r["Pred_Low"]),format_money(r["Pred_Close"]),f"{float(r.get('Pred_Volume',0)):,.0f}"])
+        lines += ["```",_transpose_table(["#","Stock","Bucket","Score","Dir","Conf","Trade","Open","High","Low","Close","Volume"],rows),"```"]
+    else:
+        lines.append("No stocks passed the Stage 4.2 quality gate today.")
 
     lines += ["","🔥 *2. +5% JUMP WATCH — NEXT 7 SESSIONS*"]
     if jump_watchlist is not None and not jump_watchlist.empty:
@@ -61,7 +62,8 @@ def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,
             cp=float(r["Current_Price"]); target=float(r["Target_Level"]); target_pct=((target/cp)-1)*100 if cp else 0
             rows.append([i,r["Symbol"],format_money(cp),format_money(target),format_percent(target_pct),format_percent(float(r.get("Estimated_7D_Upside",0))),f"{float(r.get('Jump_Probability',0)):.0f}%"])
         lines += ["```",_transpose_table(["#","Stock","CMP","+5% Target","Target%","7D Exp%","Prob"],rows),"```"]
-    else: lines.append("No strong +5% candidates today.")
+    else:
+        lines.append("No strong +5% candidates passed the probability/upside gate today.")
 
     lines += ["","⚡ *3. INTRADAY STOCKS*"]
     if intraday is not None and not intraday.empty:
@@ -69,7 +71,13 @@ def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,
         for i,(_,r) in enumerate(intraday.iterrows(),1):
             rows.append([i,r["Symbol"],r["Bias"],format_money(r["Current"]),format_money(r["Target"]),format_money(r["StopLoss"]),f"{float(r.get('Confidence',0)):.0f}%"])
         lines += ["```",_transpose_table(["#","Stock","Bias","CMP","Target","SL","Conf"],rows),"```"]
-    else: lines.append("No strong intraday setup today.")
+    else:
+        stats=(intraday.attrs.get("scan_stats",{}) if intraday is not None else {})
+        if stats:
+            rejected=max(int(stats.get("DATA_AVAILABLE",0))-int(stats.get("QUALIFIED",0)),0)
+            lines.append(f"No strong intraday setup today. Scanned {stats.get('SCANNED',0)}; qualified {stats.get('QUALIFIED',0)}; rejected {rejected}.")
+        else:
+            lines.append("No strong intraday setup today.")
     return "\n".join(lines)
 
 
