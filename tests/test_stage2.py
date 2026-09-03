@@ -106,3 +106,20 @@ def test_morning_report_has_exactly_three_sections():
     from src.telegram_report import morning_report
     report=morning_report("2026-09-03","2026-09-02",pd.DataFrame(),pd.DataFrame(),pd.DataFrame())
     assert report.count("*1. TOP STOCKS") == 1 and report.count("*2. +5% JUMP WATCH") == 1 and report.count("*3. INTRADAY STOCKS") == 1
+
+def test_stage10_end_to_end_integration_smoke():
+    from src.final_intelligence import apply_final_intelligence
+    from src.selection import select_top_stocks
+    from src.telegram_report import morning_report
+    candidates=pd.DataFrame([{
+        "Symbol":"TEST","Current_Price":100.,"Current_Open":99.,"Current_High":103.,"Current_Low":98.,"Current_Close":101.,"Current_Volume":100000,
+        "Pred_Close":108.,"Confidence":90.,"Direction":"UP","Direction_Confidence":90.,"Expected_Return":8.,"TechnicalScore":90.,
+        "RiskAdjustedScore":90.,"Score":90.,"SectorScore":85.,"MultiHorizonExpectedReturn":7.,"UncertaintyScore":90.,
+        "PredictionUncertaintyPct":5.,"PriceBucket":"B3","StopLoss":96.
+    }])
+    selected=select_top_stocks(candidates,top_n=5,regime="BULL")
+    assert len(selected)==1 and selected.iloc[0]["Symbol"]=="TEST"
+    final=apply_final_intelligence(selected,regime="BULL",breadth=70,news=65)
+    assert len(final)==1 and final.iloc[0]["Action"] in {"BUY","WATCH","HOLD","AVOID"}
+    report=morning_report("2026-09-03","2026-09-02",final,pd.DataFrame(),pd.DataFrame(),accuracy={"PreviousAccuracy":70,"CurrentAccuracy":72},scan={"Universe":100,"Data":90,"Liquid":80,"AI":40,"Selected":1})
+    assert "TEST" in report and "Price Bucket" in report and "AI Target" in report and "1. TOP 5 AI STOCKS" in report
