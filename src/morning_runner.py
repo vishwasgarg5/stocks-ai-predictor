@@ -1,6 +1,6 @@
-"""Stage 4.5 morning pipeline: calibrated quality stocks + jump + intraday."""
+"""Final Stage 10 morning pipeline: prediction + risk + decision intelligence."""
 import pandas as pd
-from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,TOP_N,MAX_PER_PRICE_BUCKET
+from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,TOP_N,MAX_PER_PRICE_BUCKET,FINAL_LEARNING_STATE_FILE
 from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime
 from .features import technical_score
 from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
@@ -8,6 +8,7 @@ from .multihorizon import train_horizon_models
 from .selection import select_top_stocks,score_candidates
 from .stage4_engine import add_stage4_context
 from .stage45_engine import add_prediction_uncertainty,add_market_risk
+from .final_intelligence import apply_final_intelligence,update_learning_state,final_stage_manifest
 from .jump_engine import generate_jump_watchlist
 from .intraday_engine import generate_intraday_watchlist
 from .ledger import prediction_exists,save_predictions,save_jump_predictions,save_intraday_predictions
@@ -37,8 +38,7 @@ def _attach_horizons(candidates,data_map,cutoff_date):
                 for horizon in [1,3,5,7,20]:
                     m=h[h["HorizonDays"]==horizon]
                     if not m.empty: row[f"Horizon_{horizon}D"]=float(m.iloc[0]["Expected_Return"])
-        except Exception as exc:
-            print(f"{symbol}: horizon prediction failed: {exc}"); row["MultiHorizonExpectedReturn"]=0.0
+        except Exception as exc: print(f"{symbol}: horizon prediction failed: {exc}"); row["MultiHorizonExpectedReturn"]=0.0
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
 
@@ -75,9 +75,12 @@ def run():
     bucket_pool=score_candidates(bucket_pool,regime)
     bucket_pool=add_market_risk(bucket_pool,regime)
     selected=select_top_stocks(bucket_pool,TOP_N,regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET)
+    # Stages 5-10: accuracy calibration, intervals, market breadth/news hooks, decision score and learning state.
+    selected=apply_final_intelligence(selected,regime=regime,breadth=50,news=50)
     selected["PredictionDate"]=str(prediction_date)
-    metadata={"Stage":"Stage 4.5","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"MaxPerPriceBucket":MAX_PER_PRICE_BUCKET,"MaxSelectedStocks":TOP_N,"MultiHorizons":[1,3,5,7,20],"UncertaintyCalibration":True,"SelectedStocks":selected["Symbol"].tolist()}
+    metadata={"Stage":"Stage 10","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"MaxPerPriceBucket":MAX_PER_PRICE_BUCKET,"MaxSelectedStocks":TOP_N,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist()}
     save_predictions(selected,prediction_date,metadata)
+    update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","FinalDecisionScore","Action","FinalRisk"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map}; jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty: save_jump_predictions(jump_watchlist,prediction_date)
     intraday=generate_intraday_watchlist(list(data_map.keys()))
