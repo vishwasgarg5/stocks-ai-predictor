@@ -1,4 +1,4 @@
-name: Stage 4.2 Tests
+name: Final Stage 10 Regression Tests
 
 on:
   push:
@@ -26,6 +26,6 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
       - name: Verify project imports
-        run: python -c "import src; print('src import OK')"
-      - name: Run regression tests
+        run: python -c "import src; import src.final_intelligence; print('final Stage 10 imports OK')"
+      - name: Run full regression suite
         run: python -m pytest -q
