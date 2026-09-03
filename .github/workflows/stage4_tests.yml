@@ -11,6 +11,8 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,5 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
+      - name: Verify project imports
+        run: python -c "import src; print('src import OK')"
       - name: Run regression tests
-        run: pytest -q
+        run: python -m pytest -q
