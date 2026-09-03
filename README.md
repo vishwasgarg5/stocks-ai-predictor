@@ -71,8 +71,6 @@ Evening evaluation compares every saved prediction against actual OHLCV, maintai
 - Evening: **4:30 PM IST**, Monday–Friday
 - Weekly: **6:00 PM IST Friday**
 
-GitHub supports timezone-aware scheduled workflows, although scheduled runs can occasionally be delayed by Actions load. citeturn0search0turn0search3
-
 ## Manual runs
 
 ```bash
