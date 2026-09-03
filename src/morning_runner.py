@@ -31,8 +31,7 @@ def _attach_horizons(candidates,data_map,cutoff_date):
     for _,row in candidates.iterrows():
         symbol=row["Symbol"]
         try:
-            hb=train_horizon_models(data_map[symbol],cutoff_date); h=add_multihorizon_predictions(data_map[symbol],{"horizons":hb},cutoff_date)
-            row["MultiHorizonExpectedReturn"]=0.0 if h.empty else float(h["Expected_Return"].astype(float).clip(-50,50).median())
+            hb=train_horizon_models(data_map[symbol],cutoff_date);h=add_multihorizon_predictions(data_map[symbol],{"horizons":hb},cutoff_date);row["MultiHorizonExpectedReturn"]=0.0 if h.empty else float(h["Expected_Return"].astype(float).clip(-50,50).median())
             if not h.empty:
                 for horizon in [1,3,5,7,20]:
                     m=h[h["HorizonDays"]==horizon]
@@ -49,21 +48,18 @@ def _attach_current_ohlcv(selected,data_map,cutoff_date):
         if df is None or df.empty:continue
         valid=df[df.index.date<=pd.Timestamp(cutoff_date).date()]
         if valid.empty:continue
-        x=valid.iloc[-1]
-        out.loc[idx,"Current_Open"]=float(x["Open"]);out.loc[idx,"Current_High"]=float(x["High"]);out.loc[idx,"Current_Low"]=float(x["Low"]);out.loc[idx,"Current_Close"]=float(x["Close"]);out.loc[idx,"Current_Volume"]=float(x["Volume"])
+        x=valid.iloc[-1];out.loc[idx,"Current_Open"]=float(x["Open"]);out.loc[idx,"Current_High"]=float(x["High"]);out.loc[idx,"Current_Low"]=float(x["Low"]);out.loc[idx,"Current_Close"]=float(x["Close"]);out.loc[idx,"Current_Volume"]=float(x["Volume"])
     return out
 
 def _portfolio_payload():
     try:
-        df,s=portfolio_snapshot()
-        s=dict(s);s["Rows"]=[]
+        df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[]
         if not df.empty:
             for _,r in df.sort_values("PnL").head(8).iterrows():
-                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}"; ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%"
-                s["Rows"].append(f"{r.Stock}: {price} | {ret} | {r.Action}")
+                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=str(r.get("Recommended_Qty",0));newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";pa=str(r.get("Averaging_Action","-"))
+                s["Rows"].append(f"{r.Stock}: CMP {price} | Avg {avg} | AI {target} | {ret} | {pa} {rec if pa=='AVERAGE' else ''} | NewAvg {newavg}")
         return s
-    except Exception as exc:
-        print(f"Portfolio report unavailable: {exc}");return {}
+    except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {}
 
 def run():
     prediction_date=today_ist()
@@ -73,15 +69,13 @@ def run():
     if len(data_map)<20:raise RuntimeError("Too few liquid stocks.")
     nifty_fallback=get_completed_session_date("morning",prediction_date);cutoff_date=get_data_cutoff_date(data_map,prediction_date,fallback=nifty_fallback)
     if cutoff_date is None:raise RuntimeError("Unable to determine completed market cutoff.")
-    regime=get_market_regime(cutoff_date)["name"];variant=load_model_state().get("active_variant","A");snapshot=get_market_snapshot(data_map,cutoff_date)
-    scored=[]
+    regime=get_market_regime(cutoff_date)["name"];variant=load_model_state().get("active_variant","A");snapshot=get_market_snapshot(data_map,cutoff_date);scored=[]
     for symbol,df in data_map.items():
         try:scored.append((symbol,technical_score(df[df.index<=pd.Timestamp(cutoff_date)])))
         except Exception:pass
     scored.sort(key=lambda x:x[1],reverse=True);candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]];candidate_rows=[];bundles={}
     for symbol in candidate_symbols:
-        try:
-            bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);bundles[symbol]=bundle;result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date)})
+        try:bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);bundles[symbol]=bundle;result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date)})
         except Exception as exc:print(f"{symbol}: prediction failed: {exc}")
     if not candidate_rows:raise RuntimeError("Unable to generate predictions.")
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
@@ -96,7 +90,6 @@ def run():
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=analyze_ipos(fetch_live_ipos());ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
-    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)}
-    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());send_telegram(report);print(report)
+    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)};report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());send_telegram(report);print(report)
 
 if __name__=="__main__":run()
