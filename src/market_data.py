@@ -84,10 +84,14 @@ def get_market_snapshot(data_map=None,cutoff=None):
     snap={"NIFTY":_index_snapshot(NIFTY_SYMBOL,cutoff=cutoff),"BANKNIFTY":_index_snapshot(BANKNIFTY_SYMBOL,cutoff=cutoff),"VIX":_index_snapshot(VIX_SYMBOL,cutoff=cutoff)}
     if data_map:
         ups=downs=0
+        cutoff_date=pd.Timestamp(cutoff).date() if cutoff is not None else None
         for df in data_map.values():
             if df is None or len(df)<2:continue
+            if cutoff_date is not None:
+                df=df[df.index.date<=cutoff_date]
+            if len(df)<2:continue
             a,b=float(df["Close"].iloc[-2]),float(df["Close"].iloc[-1]); ups+=b>a; downs+=b<a
-        total=ups+downs; snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1)}
+        total=ups+downs; snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1) if total else 50}
     else:snap["Breadth"]={"Advancers":0,"Decliners":0,"Ratio":0,"Score":50}
     return snap
 
