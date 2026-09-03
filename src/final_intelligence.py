@@ -1,4 +1,4 @@
-"""Final intelligence layer: live market/news inputs + calibrated decisions + learning state."""
+"""Final intelligence layer: calibrated decisions, uncertainty and self-learning state."""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -17,8 +17,7 @@ def walk_forward_metrics(actual,predicted,min_train=30,step=1):
     a=np.asarray(actual,dtype=float); p=np.asarray(predicted,dtype=float); n=min(len(a),len(p)); a=a[:n]; p=p[:n]
     errors=[]; apes=[]; dirs=[]
     for i in range(max(1,min_train),n,step):
-        e=abs(a[i]-p[i]); errors.append(e); apes.append(e/max(abs(a[i]),1e-6)*100)
-        dirs.append(float(np.sign(a[i]-a[i-1])==np.sign(p[i]-p[i-1])))
+        e=abs(a[i]-p[i]); errors.append(e); apes.append(e/max(abs(a[i]),1e-6)*100); dirs.append(float(np.sign(a[i]-a[i-1])==np.sign(p[i]-p[i-1])))
     return {"Samples":len(errors),"MAE":float(np.mean(errors)) if errors else np.nan,"MAPE":float(np.mean(apes)) if apes else np.nan,"DirectionAccuracy":float(np.mean(dirs)*100) if dirs else np.nan}
 
 def calibrate_confidence(confidence,empirical_accuracy=50.0,samples=0):
@@ -49,7 +48,10 @@ def event_impact_score(sentiment=0,magnitude=0,freshness=1):
     return float(np.clip(50+_num(sentiment,0)*25+_num(magnitude,0)*20*min(max(_num(freshness,1),0),1),0,100))
 
 def decision_score(row,regime="SIDEWAYS",breadth=50,news=50):
-    expected=_num(row.get("Expected_Return",0),0); success=_num(row.get("CalibratedConfidence",row.get("Confidence",50))); risk=_num(row.get("RiskAdjustedScore",row.get("Score",50))); technical=_num(row.get("TechnicalScore",50)); mh=_num(row.get("MultiHorizonExpectedReturn",0),0)
+    expected=_num(row.get("Expected_Return",0),0); success=_num(row.get("CalibratedConfidence",row.get("Confidence",50)))
+    # RegimeAdjustedScore must be the score used by the final decision.
+    risk=_num(row.get("RegimeAdjustedScore",row.get("RiskAdjustedScore",row.get("Score",50))))
+    technical=_num(row.get("TechnicalScore",50)); mh=_num(row.get("MultiHorizonExpectedReturn",0),0)
     return float(np.clip(.28*risk+.18*success+.14*technical+.12*np.clip(50+expected*5,0,100)+.10*np.clip(50+mh*4,0,100)+.10*_num(breadth)+.08*_num(news),0,100))
 
 def final_action(row):
@@ -60,17 +62,22 @@ def final_action(row):
     return "HOLD"
 
 def apply_final_intelligence(candidates,regime="SIDEWAYS",breadth=50,news=50):
-    if candidates is None or candidates.empty: return candidates
-    out=candidates.copy(); out["CalibratedConfidence"]=out.apply(lambda r: calibrate_confidence(r.get("Confidence",50),r.get("ReliabilityScore",50),r.get("ReliabilitySamples",0)),axis=1)
+    if candidates is None or candidates.empty:return candidates
+    out=candidates.copy()
+    out["CalibratedConfidence"]=out.apply(lambda r:calibrate_confidence(r.get("Confidence",50),r.get("ReliabilityScore",50),r.get("ReliabilitySamples",0)),axis=1)
     intervals=out.apply(prediction_interval,axis=1,result_type="expand")
-    for c in intervals.columns: out[c]=intervals[c]
-    out["BreadthScore"]=_num(breadth); out["NewsEventScore"]=_num(news); out["RegimeAdjustedScore"]=out.apply(lambda r: regime_risk_adjustment(regime,r.get("RiskAdjustedScore",r.get("Score",50))),axis=1)
-    out["FinalDecisionScore"]=out.apply(lambda r: decision_score(r,regime,breadth,news),axis=1); out["Action"]=out.apply(final_action,axis=1)
-    out["ModelDriftFlag"]=out.get("PredictionUncertaintyPct",pd.Series(0,index=out.index)).astype(float)>15; out["FinalRisk"]=np.select([out["FinalDecisionScore"]>=75,out["FinalDecisionScore"]>=55],["LOW","MEDIUM"],default="HIGH")
+    for c in intervals.columns:out[c]=intervals[c]
+    out["BreadthScore"]=_num(breadth); out["NewsEventScore"]=_num(news)
+    out["RegimeAdjustedScore"]=out.apply(lambda r:regime_risk_adjustment(regime,r.get("RiskAdjustedScore",r.get("Score",50))),axis=1)
+    out["FinalDecisionScore"]=out.apply(lambda r:decision_score(r,regime,breadth,news),axis=1)
+    out["Action"]=out.apply(final_action,axis=1)
+    # UncertaintyFlag is intentionally separate from observed model drift.
+    out["UncertaintyFlag"]=out.get("PredictionUncertaintyPct",pd.Series(0,index=out.index)).astype(float)>15
+    out["FinalRisk"]=np.select([out["FinalDecisionScore"]>=75,out["FinalDecisionScore"]>=55],["LOW","MEDIUM"],default="HIGH")
     return out.sort_values(["FinalDecisionScore","Score"],ascending=False).reset_index(drop=True)
 
 def drift_report(reference,current,threshold=.20):
-    if reference is None or current is None: return {"drift":False,"features":{}}
+    if reference is None or current is None:return {"drift":False,"features":{}}
     cols=[c for c in reference.columns if c in current.columns and pd.api.types.is_numeric_dtype(reference[c]) and pd.api.types.is_numeric_dtype(current[c])]; result={}; flagged=False
     for c in cols:
         a=float(reference[c].mean()); b=float(current[c].mean()); change=abs(b-a)/max(abs(a),1e-6); result[c]=change; flagged|=change>threshold
@@ -79,9 +86,9 @@ def drift_report(reference,current,threshold=.20):
 def update_learning_state(path:Path,observations:dict):
     path.parent.mkdir(parents=True,exist_ok=True); state={}
     if path.exists():
-        try: state=json.loads(path.read_text())
-        except Exception: pass
-    state.setdefault("version","final-v2"); state.setdefault("observations",[]); state["observations"].append(observations); state["observations"]=state["observations"][-250:]; state["last_update"]=observations.get("date"); path.write_text(json.dumps(state,indent=2,default=str)); return state
+        try:state=json.loads(path.read_text())
+        except Exception:state={}
+    state.setdefault("version","final-v3"); state.setdefault("observations",[]); state["observations"].append(observations); state["observations"]=state["observations"][-250:]; state["last_update"]=observations.get("date"); path.write_text(json.dumps(state,indent=2,default=str)); return state
 
 def final_stage_manifest():
     return {"Stage5":"Accuracy & Calibration","Stage6":"Adaptive AI","Stage7":"Advanced Market Intelligence","Stage8":"Live Event & News Intelligence","Stage9":"Decision Intelligence","Stage10":"Self-Improving AI","SubStages":{"5":["walk-forward","rolling validation","stock accuracy","horizon accuracy","direction accuracy","error distribution","confidence calibration","prediction intervals","accuracy weighting"],"6":["error learning","stock reliability","sector reliability","regime learning","horizon reliability","dynamic weights","feature importance","adaptive retraining"],"7":["Nifty trend","Bank Nifty trend","breadth","volatility regime","sector rotation","relative strength","correlation","FII/DII","global influence"],"8":["news ingestion","sentiment","event detection","earnings","corporate actions","result-day risk","news impact","event probability","price/news confirmation"],"9":["BUY/HOLD/AVOID","expected return","success probability","risk-adjusted return","target probability","stop-risk","reward/risk","setup quality","final score"],"10":["continuous learning","model drift","feature drift","regime drift","automatic replacement","champion/challenger","monitoring","failure detection","rollback"]}}
