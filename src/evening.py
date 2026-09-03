@@ -35,8 +35,8 @@ def _portfolio_payload():
         df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[]
         if not df.empty:
             for _,r in df.sort_values("PnL").head(8).iterrows():
-                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%"
-                s["Rows"].append(f"{r.Stock}: {price} | {ret} | {r.Action}")
+                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=str(r.get("Recommended_Qty",0));newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";pa=str(r.get("Averaging_Action","-"))
+                s["Rows"].append(f"{r.Stock}: CMP {price} | Avg {avg} | AI {target} | {ret} | {pa} {rec if pa=='AVERAGE' else ''} | NewAvg {newavg}")
         return s
     except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {}
 
@@ -61,12 +61,9 @@ def run():
             pred=row[f"Pred_{target}"];act=row[f"Actual_{target}"];row[f"Diff_{target}"]=act-pred;row[f"APE_{target}"]=(act-pred)/max(abs(act),1e-8)*100
         rows.append(row)
     if not rows:print("No stocks could be evaluated.");return
-    previous_metrics=calculate_cumulative_metrics(exclude_market_date=market_date);previous_accuracy=_model_accuracy(previous_metrics)
-    evaluation=pd.DataFrame(rows);save_evaluation(evaluation,market_date);metrics=calculate_cumulative_metrics();current_accuracy=_model_accuracy(metrics)
-    append_daily_metrics({"MarketDate":str(market_date),**metrics,"ModelAccuracy":current_accuracy});rebuild_stock_reliability()
+    previous_metrics=calculate_cumulative_metrics(exclude_market_date=market_date);previous_accuracy=_model_accuracy(previous_metrics);evaluation=pd.DataFrame(rows);save_evaluation(evaluation,market_date);metrics=calculate_cumulative_metrics();current_accuracy=_model_accuracy(metrics);append_daily_metrics({"MarketDate":str(market_date),**metrics,"ModelAccuracy":current_accuracy});rebuild_stock_reliability()
     previous_session=get_previous_session_date(market_date);retraining={"Retrained":False,"Decision":"NO PREVIOUS SESSION"}
     if previous_session is not None:retraining=compare_variants(download_many(symbols,HISTORY_PERIOD,workers=5),symbols,previous_session)
-    bucket=_bucket_metrics(evaluation,predictions);accuracy=model_report_metrics();accuracy.update({"PreviousAccuracy":previous_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0)});p=_portfolio_payload()
-    report=evening_report(market_date,evaluation,metrics,retraining,bucket_metrics=bucket,learning={"status":"UPDATED"},scan={"Universe":len(symbols),"Data":len(data_map),"Liquid":len(data_map),"AI":len(symbols),"Selected":len(evaluation)},accuracy=accuracy,portfolio=p);send_telegram(report);print(report)
+    bucket=_bucket_metrics(evaluation,predictions);accuracy=model_report_metrics();accuracy.update({"PreviousAccuracy":previous_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0)});p=_portfolio_payload();report=evening_report(market_date,evaluation,metrics,retraining,bucket_metrics=bucket,learning={"status":"UPDATED"},scan={"Universe":len(symbols),"Data":len(data_map),"Liquid":len(data_map),"AI":len(symbols),"Selected":len(evaluation)},accuracy=accuracy,portfolio=p);send_telegram(report);print(report)
 
 if __name__=="__main__":run()
