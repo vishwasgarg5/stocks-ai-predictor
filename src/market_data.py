@@ -92,12 +92,35 @@ def get_nifty_data(period="1y"):
     except Exception: return pd.DataFrame()
 
 def get_completed_session_date(mode="morning", reference_date=None):
+    """Return the latest NSE session strictly before today's prediction date in morning mode."""
     df=get_nifty_data("1mo")
     if df.empty: return None
     from .utils import today_ist
-    reference=reference_date or today_ist(); dates=[x.date() for x in df.index]
+    reference=reference_date or today_ist(); dates=sorted({x.date() for x in df.index})
     valid=[x for x in dates if x < reference] if mode=="morning" else [x for x in dates if x <= reference]
     return max(valid) if valid else None
+
+def get_data_cutoff_date(data_map, reference_date=None, fallback=None, min_fraction=0.10):
+    """Find the latest completed session actually present in the downloaded equity data.
+
+    This prevents the morning run from incorrectly using T-2 when yesterday's
+    completed NSE bars are already available, while requiring broad agreement
+    across stocks so a single stale/early feed cannot move the cutoff forward.
+    The current prediction date itself is always excluded.
+    """
+    from .utils import today_ist
+    reference=pd.Timestamp(reference_date or today_ist()).date()
+    counts={}
+    total=max(len(data_map),1)
+    for df in data_map.values():
+        if df is None or df.empty: continue
+        for idx in set(pd.Timestamp(x).date() for x in df.index if pd.Timestamp(x).date() < reference):
+            counts[idx]=counts.get(idx,0)+1
+    threshold=max(5,int(np.ceil(total*min_fraction)))
+    valid=[d for d,c in counts.items() if c>=threshold]
+    if valid:
+        return max(valid)
+    return fallback if fallback is not None and pd.Timestamp(fallback).date() < reference else None
 
 def get_previous_session_date(session_date):
     df=get_nifty_data("3mo")
