@@ -19,7 +19,6 @@ def add_intraday_features(df):
     close, high, low, volume = x["Close"], x["High"], x["Low"], x["Volume"]
     day = pd.Series(x.index.date, index=x.index)
     typical = (high + low + close) / 3
-    # VWAP must reset at the start of every trading day.
     x["VWAP"] = (typical * volume).groupby(day).cumsum() / volume.groupby(day).cumsum().replace(0, np.nan)
     x["EMA9"] = close.ewm(span=9, adjust=False).mean()
     x["EMA20"] = close.ewm(span=20, adjust=False).mean()
@@ -36,10 +35,10 @@ def add_intraday_features(df):
 
 def calculate_intraday_setup(df):
     if df.empty:
-        return None
+        return None, "NO_DATA"
     x = add_intraday_features(df).dropna()
     if len(x) < INTRADAY_MIN_ROWS:
-        return None
+        return None, "INSUFFICIENT_DATA"
     row = x.iloc[-1]
     current, vwap, ema9, ema20 = map(float, (row["Close"], row["VWAP"], row["EMA9"], row["EMA20"]))
     relative_volume, momentum, range_pct = float(row["RelativeVolume"]), float(row["Momentum"]), float(row["Range"])
@@ -51,9 +50,12 @@ def calculate_intraday_setup(df):
     score += 6 if range_pct > 0.015 else 0
     score = float(np.clip(score, 0, 100))
     bias = "UP" if score >= 60 else "DOWN" if score <= 40 else "NEUTRAL"
-    # Only actionable setups are returned; neutral/low-quality signals are suppressed.
-    if bias == "NEUTRAL" or score < 70 or relative_volume < 1.10:
-        return None
+    if bias == "NEUTRAL":
+        return None, "NEUTRAL"
+    if score < 70:
+        return None, "LOW_SCORE"
+    if relative_volume < 1.10:
+        return None, "LOW_RELATIVE_VOLUME"
     expected_move = max(abs(momentum), range_pct * 1.5, INTRADAY_MIN_MOVE)
     if bias == "UP":
         target, stop_loss = current * (1 + expected_move), current * (1 - expected_move * 0.55)
@@ -61,10 +63,10 @@ def calculate_intraday_setup(df):
         target, stop_loss = current * (1 - expected_move), current * (1 + expected_move * 0.55)
     confidence = min(95.0, 50 + abs(score - 50) * 0.7 + min(relative_volume, 3) * 5)
     if confidence < 65:
-        return None
+        return None, "LOW_CONFIDENCE"
     return {"Current": current, "Bias": bias, "Target": target, "StopLoss": stop_loss,
             "ExpectedMove": expected_move * 100, "Score": score, "Confidence": confidence,
-            "RelativeVolume": relative_volume, "VWAP": vwap, "EMA9": ema9, "EMA20": ema20}
+            "RelativeVolume": relative_volume, "VWAP": vwap, "EMA9": ema9, "EMA20": ema20}, "QUALIFIED"
 
 
 def generate_intraday_watchlist(symbols, max_workers=6):
@@ -80,14 +82,26 @@ def generate_intraday_watchlist(symbols, max_workers=6):
                     data[symbol] = df
             except Exception as exc:
                 print(f"{symbol}: {exc}")
+
+    counts = {"SCANNED": len(symbols), "DATA_AVAILABLE": len(data), "NO_DATA": max(0, len(symbols) - len(data)),
+              "INSUFFICIENT_DATA": 0, "NEUTRAL": 0, "LOW_SCORE": 0, "LOW_RELATIVE_VOLUME": 0,
+              "LOW_CONFIDENCE": 0, "QUALIFIED": 0}
     results = []
     for symbol, df in data.items():
         try:
-            setup = calculate_intraday_setup(df)
+            setup, reason = calculate_intraday_setup(df)
+            counts[reason] = counts.get(reason, 0) + 1
             if setup is not None:
+                counts["QUALIFIED"] += 1
                 results.append({"Symbol": symbol, **setup})
         except Exception as exc:
             print(f"{symbol}: setup failed: {exc}")
+
     if not results:
-        return pd.DataFrame()
-    return pd.DataFrame(results).sort_values(["Score", "Confidence"], ascending=False).head(INTRADAY_TOP_N).reset_index(drop=True)
+        empty = pd.DataFrame()
+        empty.attrs["scan_stats"] = counts
+        return empty
+    result = pd.DataFrame(results).sort_values(["Score", "Confidence"], ascending=False).head(INTRADAY_TOP_N).reset_index(drop=True)
+    counts["RETURNED"] = len(result)
+    result.attrs["scan_stats"] = counts
+    return result
