@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from .config import DATA_DIR,UNIVERSE_FILES,NIFTY_SYMBOL,MAX_UNIVERSE,HISTORY_PERIOD,MIN_AVG_TRADED_VALUE,MIN_PRICE
+from .config import DATA_DIR,UNIVERSE_FILES,NIFTY_SYMBOL,BANKNIFTY_SYMBOL,VIX_SYMBOL,MAX_UNIVERSE,HISTORY_PERIOD,MIN_AVG_TRADED_VALUE,MIN_PRICE
 from .utils import clean_ohlcv
 NSE_EQUITY_URL="https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 
@@ -69,9 +69,27 @@ def liquidity_score(df):
 
 def filter_liquid_universe(data_map):return {s:df for s,df in data_map.items() if liquidity_score(df)>0}
 
-def get_nifty_data(period="1y"):
-    try:return clean_ohlcv(yf.download(NIFTY_SYMBOL,period=period,interval="1d",auto_adjust=False,progress=False,threads=False))
+def get_nifty_data(period="1y",symbol=None):
+    try:return clean_ohlcv(yf.download(symbol or NIFTY_SYMBOL,period=period,interval="1d",auto_adjust=False,progress=False,threads=False))
     except Exception:return pd.DataFrame()
+
+def _index_snapshot(symbol,period="3mo",cutoff=None):
+    df=get_nifty_data(period,symbol)
+    if cutoff is not None and not df.empty: df=df[df.index.date<=pd.Timestamp(cutoff).date()]
+    if df.empty:return {"Close":np.nan,"Change1D":np.nan}
+    close=float(df["Close"].iloc[-1]); prev=float(df["Close"].iloc[-2]) if len(df)>1 else close
+    return {"Close":close,"Change1D":(close/prev-1)*100 if prev else 0.0}
+
+def get_market_snapshot(data_map=None,cutoff=None):
+    snap={"NIFTY":_index_snapshot(NIFTY_SYMBOL,cutoff=cutoff),"BANKNIFTY":_index_snapshot(BANKNIFTY_SYMBOL,cutoff=cutoff),"VIX":_index_snapshot(VIX_SYMBOL,cutoff=cutoff)}
+    if data_map:
+        ups=downs=0
+        for df in data_map.values():
+            if df is None or len(df)<2:continue
+            a,b=float(df["Close"].iloc[-2]),float(df["Close"].iloc[-1]); ups+=b>a; downs+=b<a
+        total=ups+downs; snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1)}
+    else:snap["Breadth"]={"Advancers":0,"Decliners":0,"Ratio":0,"Score":50}
+    return snap
 
 def get_completed_session_date(mode="morning",reference_date=None):
     df=get_nifty_data("1mo")
@@ -82,7 +100,6 @@ def get_completed_session_date(mode="morning",reference_date=None):
     return max(valid) if valid else None
 
 def get_data_cutoff_date(data_map,reference_date=None,fallback=None,min_fraction=0.50):
-    """Use the newest pre-prediction session supported by at least half the equity feed."""
     from .utils import today_ist
     reference=pd.Timestamp(reference_date or today_ist()).date();counts={};total=max(len(data_map),1)
     for df in data_map.values():
