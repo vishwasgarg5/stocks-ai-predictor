@@ -1,6 +1,6 @@
-"""Stage 10 morning pipeline: prediction + bucket OHLCV + IPO + intraday."""
+"""Stage 10 morning pipeline: prediction + bucket OHLCV + IPO + intraday + portfolio."""
 import pandas as pd
-from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,TOP_N,MAX_PER_PRICE_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,DAILY_METRICS_FILE
+from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,TOP_N,MAX_PER_PRICE_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE
 from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime,get_market_snapshot
 from .features import technical_score
 from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
@@ -16,21 +16,9 @@ from .ipo_engine import analyze_ipos
 from .ledger import prediction_exists,save_predictions,save_jump_predictions,save_intraday_predictions
 from .retraining import load_model_state
 from .telegram_report import send_telegram,morning_report
+from .portfolio_report import portfolio_snapshot
+from .report_metrics import model_report_metrics
 from .utils import today_ist,is_weekday
-
-def _load_accuracy():
-    if not DAILY_METRICS_FILE.exists(): return {}
-    try:
-        df=pd.read_csv(DAILY_METRICS_FILE).sort_values("MarketDate")
-        if df.empty:return {}
-        vals=[]
-        for _,r in df.iterrows():
-            if "CloseMAPE" in r and pd.notna(r["CloseMAPE"]):
-                vals.append(max(0.0,min(100.0,100.0-float(r["CloseMAPE"]))))
-        if not vals:return {}
-        return {"PreviousAccuracy":vals[-2] if len(vals)>1 else None,"CurrentAccuracy":vals[-1],"AccuracySamples":int(df.iloc[-1].get("Samples",0))}
-    except Exception as exc:
-        print(f"Accuracy history unavailable: {exc}");return {}
 
 def _bucket_candidates(candidates,max_per_bucket=2):
     if candidates is None or candidates.empty:return candidates.iloc[0:0] if candidates is not None else pd.DataFrame()
@@ -65,6 +53,18 @@ def _attach_current_ohlcv(selected,data_map,cutoff_date):
         out.loc[idx,"Current_Open"]=float(x["Open"]);out.loc[idx,"Current_High"]=float(x["High"]);out.loc[idx,"Current_Low"]=float(x["Low"]);out.loc[idx,"Current_Close"]=float(x["Close"]);out.loc[idx,"Current_Volume"]=float(x["Volume"])
     return out
 
+def _portfolio_payload():
+    try:
+        df,s=portfolio_snapshot()
+        s=dict(s);s["Rows"]=[]
+        if not df.empty:
+            for _,r in df.sort_values("PnL").head(8).iterrows():
+                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}"; ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%"
+                s["Rows"].append(f"{r.Stock}: {price} | {ret} | {r.Action}")
+        return s
+    except Exception as exc:
+        print(f"Portfolio report unavailable: {exc}");return {}
+
 def run():
     prediction_date=today_ist()
     if not is_weekday():print("Weekend. Morning prediction skipped.");return
@@ -73,7 +73,6 @@ def run():
     if len(data_map)<20:raise RuntimeError("Too few liquid stocks.")
     nifty_fallback=get_completed_session_date("morning",prediction_date);cutoff_date=get_data_cutoff_date(data_map,prediction_date,fallback=nifty_fallback)
     if cutoff_date is None:raise RuntimeError("Unable to determine completed market cutoff.")
-    print(f"Prediction date: {prediction_date}; completed data cutoff: {cutoff_date}; scanned: {scan_count}; liquid: {len(data_map)}")
     regime=get_market_regime(cutoff_date)["name"];variant=load_model_state().get("active_variant","A");snapshot=get_market_snapshot(data_map,cutoff_date)
     scored=[]
     for symbol,df in data_map.items():
@@ -97,6 +96,7 @@ def run():
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=analyze_ipos(fetch_live_ipos());ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
-    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,scan_count=scan_count,liquid_count=len(data_map),accuracy=_load_accuracy());send_telegram(report);print(report)
+    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)}
+    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());send_telegram(report);print(report)
 
 if __name__=="__main__":run()
