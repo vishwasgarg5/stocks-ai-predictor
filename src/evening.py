@@ -1,18 +1,20 @@
-"""Evening evaluation, bucket performance and Stage 10 learning report."""
+"""Evening evaluation, bucket performance, Stage 10 learning and portfolio report."""
 import numpy as np
 import pandas as pd
-from .config import HISTORY_PERIOD,DAILY_METRICS_FILE
+from .config import HISTORY_PERIOD
 from .market_data import get_completed_session_date,get_previous_session_date,download_many,get_row_for_date,get_previous_row
 from .ledger import load_predictions,evaluation_exists,save_evaluation,append_daily_metrics,rebuild_stock_reliability,latest_prediction_date
 from .retraining import compare_variants
 from .telegram_report import send_telegram,evening_report
+from .portfolio_report import portfolio_snapshot
+from .report_metrics import model_report_metrics
 from .utils import direction_from_prices,is_weekday
 
 def calculate_cumulative_metrics(exclude_market_date=None):
     from .config import EVALUATIONS_DIR
     frames=[]
     for path in sorted(EVALUATIONS_DIR.glob("evaluation_*.csv")):
-        if exclude_market_date is not None and path.stem.endswith(str(exclude_market_date)): continue
+        if exclude_market_date is not None and path.stem.endswith(str(exclude_market_date)):continue
         try:
             df=pd.read_csv(path)
             if not df.empty:frames.append(df)
@@ -21,15 +23,22 @@ def calculate_cumulative_metrics(exclude_market_date=None):
     data=pd.concat(frames,ignore_index=True);vals=[float(data[f"APE_{t}"].abs().mean()) for t in ["Open","High","Low","Close"] if f"APE_{t}" in data]
     return {"Samples":len(data),"OpenMAPE":float(data["APE_Open"].abs().mean()),"HighMAPE":float(data["APE_High"].abs().mean()),"LowMAPE":float(data["APE_Low"].abs().mean()),"CloseMAPE":float(data["APE_Close"].abs().mean()),"VolumeMAPE":float(data["APE_Volume"].abs().mean()) if "APE_Volume" in data else 0.0,"OverallMAPE":float(np.mean(vals)) if vals else 0.0,"DirectionAccuracy":float(data["DirectionCorrect"].mean()*100)}
 
-def _model_accuracy(metrics):
-    return max(0.0,min(100.0,100.0-float(metrics.get("CloseMAPE",100.0))))
-
+def _model_accuracy(metrics):return max(0.0,min(100.0,100.0-float(metrics.get("CloseMAPE",100.0))))
 def _bucket_metrics(evaluation,predictions):
     if evaluation is None or evaluation.empty or "PriceBucket" not in predictions:return {}
     x=evaluation.merge(predictions[["Symbol","PriceBucket"]].drop_duplicates("Symbol"),on="Symbol",how="left");result={}
-    for bucket,g in x.groupby("PriceBucket"):
-        result[str(bucket)]=float((1-g["APE_Close"].abs()/100).clip(0,1).mean()*100)
+    for bucket,g in x.groupby("PriceBucket"):result[str(bucket)]=float((1-g["APE_Close"].abs()/100).clip(0,1).mean()*100)
     return result
+
+def _portfolio_payload():
+    try:
+        df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[]
+        if not df.empty:
+            for _,r in df.sort_values("PnL").head(8).iterrows():
+                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%"
+                s["Rows"].append(f"{r.Stock}: {price} | {ret} | {r.Action}")
+        return s
+    except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {}
 
 def run():
     if not is_weekday():print("Weekend. Evening evaluation skipped.");return
@@ -52,12 +61,12 @@ def run():
             pred=row[f"Pred_{target}"];act=row[f"Actual_{target}"];row[f"Diff_{target}"]=act-pred;row[f"APE_{target}"]=(act-pred)/max(abs(act),1e-8)*100
         rows.append(row)
     if not rows:print("No stocks could be evaluated.");return
-    # Capture the previous validated model accuracy BEFORE adding today's evaluation.
     previous_metrics=calculate_cumulative_metrics(exclude_market_date=market_date);previous_accuracy=_model_accuracy(previous_metrics)
     evaluation=pd.DataFrame(rows);save_evaluation(evaluation,market_date);metrics=calculate_cumulative_metrics();current_accuracy=_model_accuracy(metrics)
     append_daily_metrics({"MarketDate":str(market_date),**metrics,"ModelAccuracy":current_accuracy});rebuild_stock_reliability()
     previous_session=get_previous_session_date(market_date);retraining={"Retrained":False,"Decision":"NO PREVIOUS SESSION"}
     if previous_session is not None:retraining=compare_variants(download_many(symbols,HISTORY_PERIOD,workers=5),symbols,previous_session)
-    bucket=_bucket_metrics(evaluation,predictions);report=evening_report(market_date,evaluation,metrics,retraining,bucket_metrics=bucket,learning={"status":"UPDATED"},scan_count=len(symbols),accuracy={"PreviousAccuracy":previous_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0)});send_telegram(report);print(report)
+    bucket=_bucket_metrics(evaluation,predictions);accuracy=model_report_metrics();accuracy.update({"PreviousAccuracy":previous_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0)});p=_portfolio_payload()
+    report=evening_report(market_date,evaluation,metrics,retraining,bucket_metrics=bucket,learning={"status":"UPDATED"},scan={"Universe":len(symbols),"Data":len(data_map),"Liquid":len(data_map),"AI":len(symbols),"Selected":len(evaluation)},accuracy=accuracy,portfolio=p);send_telegram(report);print(report)
 
 if __name__=="__main__":run()
