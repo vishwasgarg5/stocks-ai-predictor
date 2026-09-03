@@ -48,7 +48,8 @@ def _stock_rows(selected):
 
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
     snapshot=kwargs.get("market_snapshot",{}); regime=kwargs.get("regime","-"); ipo=kwargs.get("ipo")
-    lines=["📈 *AI NSE MORNING REPORT*",f"_{prediction_date} | Data: {cutoff_date} | {MODEL_VERSION}_","","🎯 *1. MARKET + PRICE-BUCKET STOCKS + IPO*"]
+    # Keep these exact section labels for the regression contract and mobile readability.
+    lines=["📈 *AI NSE MORNING REPORT*",f"_{prediction_date} | Data: {cutoff_date} | {MODEL_VERSION}_","","🎯 *1. TOP STOCKS — PRICE BUCKET + OHLCV + IPO*"]
     lines += _market_lines(snapshot,regime)+["","*Stocks — current OHLCV + AI forecast*"]
     if selected is not None and not selected.empty:
         lines += ["```",_transpose_table(["#","Stock","Bucket","CMP","Open","High","Low","Close","Volume","AI Close","Conf","Action"],_stock_rows(selected)),"```"]
