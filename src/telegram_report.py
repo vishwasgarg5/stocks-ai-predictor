@@ -125,7 +125,7 @@ def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intra
     scan = kwargs.get("scan", {})
     portfolio = kwargs.get("portfolio", {})
     warning = str(accuracy.get("Health", "")).upper() in {"WARNING", "DEGRADED", "POOR"} or str(accuracy.get("Drift", "")).upper() in {"WARNING", "HIGH", "DEGRADED"}
-    lines = ["📈 *AI NSE MORNING REPORT*", f"_{prediction_date} | Data: {cutoff_date} | {MODEL_VERSION}_", *(_scan_lines(scan)), *(_accuracy_lines(accuracy, compact=True)), "", "🎯 *1. TOP 5 AI STOCKS*"]
+    lines = ["📈 *AI NSE MORNING REPORT*", f"_{prediction_date} | Data: {cutoff_date} | {MODEL_VERSION}_", *(_scan_lines(scan)), *(_accuracy_lines(accuracy, compact=True)), "", "🎯 *1. TOP STOCKS*"]
     if warning:
         lines.append("⚠️ *MODEL WARNING* — confidence reduced because model health/drift is weak.")
     lines += _market_lines(snapshot, regime) + _sector_lines(selected) + ["", "*Price Bucket + Current OHLCV + AI Forecast*"]
@@ -140,7 +140,7 @@ def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intra
         lines.append("GMP is unofficial; not a guaranteed listing price.")
     else:
         lines.append("*IPO / NEW LISTINGS:* No verified live records available.")
-    lines += _portfolio_lines(portfolio) + ["", "🔥 *2. +5% JUMP WATCH — TOP 5*"]
+    lines += _portfolio_lines(portfolio) + ["", "🔥 *2. +5% JUMP WATCH*"]
     if jump_watchlist is not None and not jump_watchlist.empty:
         rows = []
         for i, (_, r) in enumerate(jump_watchlist.head(5).iterrows(), 1):
@@ -151,7 +151,7 @@ def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intra
         lines += ["```", _transpose_table(["#", "Stock", "CMP", "+5% Target", "Target%", "7D Exp%", "Prob"], rows), "```"]
     else:
         lines.append("No strong +5% candidate passed the gate.")
-    lines += ["", "⚡ *3. INTRADAY — TOP 5*"]
+    lines += ["", "⚡ *3. INTRADAY STOCKS*"]
     if intraday is not None and not intraday.empty:
         rows = [[i, r.get("Symbol", "-"), r.get("Bias", "-"), format_money(r.get("Current", 0)), format_money(r.get("Target", 0)), format_money(r.get("StopLoss", 0)), f"{float(r.get('Confidence', 0) or 0):.0f}%"] for i, (_, r) in enumerate(intraday.head(5).iterrows(), 1)]
         lines += ["```", _transpose_table(["#", "Stock", "Bias", "CMP", "Target", "SL", "Conf"], rows), "```"]
