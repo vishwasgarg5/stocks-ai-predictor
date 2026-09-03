@@ -1,16 +1,15 @@
-"""
-STAGE 4 TELEGRAM REPORT
-=======================
-Easy access: this file controls the Telegram layout.
-Includes Stage 3A price buckets, Stage 3B multi-horizon forecasts,
-and Stage 4 sector intelligence while retaining Stage 2 reports.
+"""Stage 4 Telegram reporting.
+Morning report intentionally contains only three actionable sections:
+1) bucket-based top stocks with predicted OHLCV,
+2) 7-session +5% jump watchlist,
+3) intraday setups.
+Evening reporting remains unchanged for evaluation/retraining.
 """
 import os
 import requests
 import pandas as pd
 from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION
 from .utils import format_money, format_percent, split_messages
-from .selection import expected_return_score, regime_direction_score
 
 def send_telegram(text):
     token=os.getenv("TELEGRAM_BOT_TOKEN"); chat_id=os.getenv("TELEGRAM_CHAT_ID")
@@ -30,42 +29,31 @@ def _table(headers,rows):
     body=["  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))) for row in all_rows]
     return "\n".join([body[0],sep]+body[1:])
 
-def _evaluation_components(row,regime):
-    return {"Technical":float(row.get("TechnicalScore",50)),"Expected Return":expected_return_score(row.get("Expected_Return",0)),"Model Confidence":float(row.get("Confidence",50)),"Direction":float(row.get("Direction_Confidence",50)),"Reliability":float(row.get("ReliabilityScore",50)),"Regime":regime_direction_score(row.get("Direction","NEUTRAL"),regime),"Sector":float(row.get("SectorScore",50))}
-
-def morning_report(prediction_date,cutoff_date,schedule_status,regime,model_variant,selected,jump_watchlist,intraday,universe_count=None,liquid_count=None,prescreen_count=None,horizon_tables=None):
-    horizon_tables=horizon_tables or {}
-    lines=["📈 AI NSE STOCK PREDICTION — STAGE 4","```",_table(["Market Info","Value"],[["Prediction Date",prediction_date],["Data Cutoff",cutoff_date],["Schedule",schedule_status],["Market Regime",regime],["Model",model_variant],["Model Version",MODEL_VERSION]]),"```","","🔎 SCAN SUMMARY","```",_table(["Stage","Stocks"],[["Universe Loaded",universe_count if universe_count is not None else "-"],["Liquid Universe",liquid_count if liquid_count is not None else "-"],["Technical Prescreen",prescreen_count if prescreen_count is not None else "-"],["ML Final Top 5",5 if selected is not None and not selected.empty else 0],["Jump Watch Candidates",30 if jump_watchlist is not None and not jump_watchlist.empty else 0],["Intraday Scan",liquid_count if liquid_count is not None else "-"]]),"```","","🎯 NEXT-DAY TOP 5"]
+def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
+    """Compact actionable morning report; no scan diagnostics or model internals."""
+    lines=["📈 *AI NSE MORNING REPORT*",f"_{prediction_date} | Data: {cutoff_date}_","","🎯 *1. TOP STOCKS — PRICE BUCKET + PREDICTED OHLCV*"]
     if selected is not None and not selected.empty:
         rows=[]
-        for i,(_,r) in enumerate(selected.iterrows(),1): rows.append([i,r["Symbol"],r.get("PriceBucket","-"),r.get("Sector","-"),f"{r['Score']:.1f}",r["Direction"],f"{r['Confidence']:.0f}%",f"{r['Expected_Return']:+.2f}%",f"{r['Pred_Close']:.2f}"])
-        lines += ["```",_table(["#","Stock","Bucket","Sector","Score","Dir","Conf","Exp%","Close"],rows),"```","","📊 PREDICTED OHLC","```"]
-        lines += [_table(["Stock","Open","High","Low","Close"],[[r["Symbol"],f"{r['Pred_Open']:.2f}",f"{r['Pred_High']:.2f}",f"{r['Pred_Low']:.2f}",f"{r['Pred_Close']:.2f}"] for _,r in selected.iterrows()]),"```","","🔭 MULTI-HORIZON FORECAST — STAGE 3B","```"]
-        mh=[]
-        for _,r in selected.iterrows():
-            h=horizon_tables.get(r["Symbol"],pd.DataFrame())
-            vals=[]
-            for d in [1,3,5,7,20]:
-                z=h[h["HorizonDays"]==d] if not h.empty else pd.DataFrame()
-                vals.append(f"{float(z['Expected_Return'].iloc[0]):+.1f}%" if not z.empty else "-")
-            mh.append([r["Symbol"],*vals])
-        lines += [_table(["Stock","1D","3D","5D","7D","20D"],mh),"```","","🧠 TOP 5 EVALUATION","```"]
-        cr=[]
-        for _,r in selected.iterrows():
-            c=_evaluation_components(r,regime); cr.append([r["Symbol"],f"{c['Technical']:.0f}",f"{c['Expected Return']:.0f}",f"{c['Model Confidence']:.0f}",f"{c['Direction']:.0f}",f"{c['Reliability']:.0f}",f"{c['Regime']:.0f}",f"{c['Sector']:.0f}",f"{r['Score']:.1f}"])
-        lines += [_table(["Stock","Tech","ExpRet","Model","Dir","Reliab","Regime","Sector","Final"],cr),"```","","⚖️ SELECTION WEIGHTS","```",_table(["Component","Weight"],[["Technical Score","20%"],["Expected Return","18%"],["Model Confidence","18%"],["Direction Confidence","14%"],["Reliability","10%"],["Market Regime","10%"],["Sector Strength","10%"]]),"```","","🏷️ PRICE BUCKETS","```",_table(["Bucket","Price"],[["B1","> ₹1,000"],["B2","₹500–₹999"],["B3","₹100–₹499"],["B4","₹50–₹99"],["B5","₹10–₹49"]]),"```"]
-    else: lines.append("No next-day predictions generated.")
-    lines += ["","🔥 7-DAY +5% JUMP WATCHLIST"]
+        for i,(_,r) in enumerate(selected.iterrows(),1):
+            rows.append([i,r["Symbol"],r.get("PriceBucket","-"),f"{r.get('Score',0):.1f}",r.get("Direction","-"),f"{r.get('Confidence',0):.0f}%",format_money(r["Pred_Open"]),format_money(r["Pred_High"]),format_money(r["Pred_Low"]),format_money(r["Pred_Close"]),f"{float(r.get('Pred_Volume',0)):,.0f}"])
+        lines += ["```",_table(["#","Stock","Bucket","Score","Dir","Conf","Open","High","Low","Close","Volume"],rows),"```"]
+    else: lines.append("No qualifying bucket-based stock today.")
+
+    lines += ["","🔥 *2. +5% JUMP WATCH — NEXT 7 SESSIONS*"]
     if jump_watchlist is not None and not jump_watchlist.empty:
         rows=[]
         for i,(_,r) in enumerate(jump_watchlist.iterrows(),1):
-            cp=float(r["Current_Price"]); target=float(r["Target_Level"]); tp=((target/cp)-1)*100 if cp else 0
-            rows.append([i,r["Symbol"],format_money(cp),format_money(target),format_percent(tp),format_percent(float(r.get("Estimated_7D_Upside",0))),f"{r['Jump_Probability']:.0f}%"])
-        lines += ["```",_table(["#","Stock","CMP","Target","Target%","7D Exp%","Prob"],rows),"```","```",_table(["Meaning","Definition"],[["Target%","Distance from CMP to +5% target"],["7D Exp%","Model-estimated 7-trading-day upside"],["Prob","Probability of reaching +5% within 7 sessions"]]),"```"]
+            cp=float(r["Current_Price"]); target=float(r["Target_Level"]); target_pct=((target/cp)-1)*100 if cp else 0
+            rows.append([i,r["Symbol"],format_money(cp),format_money(target),format_percent(target_pct),format_percent(float(r.get("Estimated_7D_Upside",0))),f"{float(r.get('Jump_Probability',0)):.0f}%"])
+        lines += ["```",_table(["#","Stock","CMP","+5% Target","Target%","7D Exp%","Prob"],rows),"```"]
     else: lines.append("No strong +5% candidates today.")
-    lines += ["","⚡ INTRADAY TOP 5"]
+
+    lines += ["","⚡ *3. INTRADAY STOCKS*"]
     if intraday is not None and not intraday.empty:
-        lines += ["```",_table(["#","Stock","Bias","CMP","Target","SL","Conf"],[[i,r["Symbol"],r["Bias"],format_money(r["Current"]),format_money(r["Target"]),format_money(r["StopLoss"]),f"{r['Confidence']:.0f}%"] for i,(_,r) in enumerate(intraday.iterrows(),1)]),"```"]
+        rows=[]
+        for i,(_,r) in enumerate(intraday.iterrows(),1):
+            rows.append([i,r["Symbol"],r["Bias"],format_money(r["Current"]),format_money(r["Target"]),format_money(r["StopLoss"]),f"{float(r.get('Confidence',0)):.0f}%"])
+        lines += ["```",_table(["#","Stock","Bias","CMP","Target","SL","Conf"],rows),"```"]
     else: lines.append("No strong intraday setup today.")
     return "\n".join(lines)
 
