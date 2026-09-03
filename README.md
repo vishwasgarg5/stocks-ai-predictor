@@ -1,70 +1,210 @@
-# AI NSE Stock Predictor — Final Stage 10
+# AI NSE Stock Predictor — Stage 10
 
-A production-oriented NSE stock prediction system with a cumulative **Stage 1 → Stage 10** architecture. Existing next-day OHLCV, +5% jump and intraday engines are retained; the final intelligence layer adds accuracy calibration, adaptive learning, market intelligence, event/news hooks, decision scoring and drift monitoring.
+Production-oriented NSE stock prediction and decision-support system built as a cumulative **Stage 1 → Stage 10** pipeline. It combines OHLCV prediction, price-bucket coverage, market/sector intelligence, jump-watch and intraday screening, decision scoring, portfolio reporting, accuracy validation and self-improving model controls.
 
-## Final architecture
+> **Purpose:** generate compact, evidence-based NSE watchlists and evaluate the model against actual market results. Predictions are not guaranteed returns or investment advice.
 
-```text
-STAGE 1  Foundation
-  1.0 Basic OHLC → 1.1 Features → 1.2 Indicators → 1.3 XGBoost → 1.4 Time-series validation → 1.5 Accuracy
-      ↓
-STAGE 2  Production Prediction
-  2.0 NSE universe → 2.1 Data → 2.2 OHLCV → 2.3 Direction → 2.4 +5% Jump → 2.5 Intraday → 2.6 Evaluation → 2.7 Champion/Challenger → 2.8 Telegram
-      ↓
-STAGE 3  Advanced Forecasting
-  3A Price Buckets → 3B 1D/3D/5D/7D/20D horizons
-      ↓
-STAGE 4  Market Intelligence
-  4.0 Regime → 4.1 Sector Strength → 4.2 Rotation → 4.3 Breadth → 4.4 Ranking → 4.5 Risk Intelligence
-      ↓
-STAGE 5  Accuracy & Calibration
-  5.0 Walk-forward → 5.1 Rolling → 5.2 Stock accuracy → 5.3 Horizon accuracy → 5.4 Direction → 5.5 Errors → 5.6 Calibration → 5.7 Intervals → 5.8 Accuracy weighting
-      ↓
-STAGE 6  Adaptive AI
-  6.0 Error learning → 6.1 Stock reliability → 6.2 Sector reliability → 6.3 Regime learning → 6.4 Horizon reliability → 6.5 Dynamic ensemble → 6.6 Feature importance → 6.7 Adaptive retraining
-      ↓
-STAGE 7  Advanced Market Intelligence
-  7.0 Nifty → 7.1 Bank Nifty → 7.2 Breadth → 7.3 Volatility → 7.4 Rotation → 7.5 Relative strength → 7.6 Correlation → 7.7 FII/DII → 7.8 Global influence
-      ↓
-STAGE 8  Event & News Intelligence
-  8.0 Ingestion → 8.1 Sentiment → 8.2 Events → 8.3 Earnings → 8.4 Corporate actions → 8.5 Result risk → 8.6 Impact → 8.7 Event probability → 8.8 Price/news confirmation
-      ↓
-STAGE 9  Decision Intelligence
-  9.0 BUY/HOLD/AVOID → 9.1 Return → 9.2 Success probability → 9.3 Risk-adjusted return → 9.4 Target probability → 9.5 Stop-risk → 9.6 Reward/Risk → 9.7 Setup quality → 9.8 Final score
-      ↓
-STAGE 10  Self-Improving AI
-  10.0 Continuous learning → 10.1 Model drift → 10.2 Feature drift → 10.3 Regime drift → 10.4 Model replacement → 10.5 Champion/Challenger evolution → 10.6 Monitoring → 10.7 Failure detection → 10.8 Rollback
-```
-
-## Morning output — exactly 3 actionable sections
-
-1. **Top stocks** — up to 2 qualified stocks per price bucket, maximum 10; no weak-stock padding.
-2. **+5% jump watch** — true 7-session forecast with probability/upside gates.
-3. **Intraday stocks** — strict volume/confidence/direction gates and rejection funnel when empty.
-
-The selected stock records now also carry calibrated confidence, prediction interval, market/breadth/news hooks, regime-adjusted score, final decision score, action and risk fields.
-
-### Important data rule
-
-Stages 7–8 never fabricate unavailable FII/DII, global or news information. Missing optional external inputs stay neutral until a real data source is supplied. This prevents false signals and future-data leakage.
-
-## Learning loop
+## Architecture
 
 ```text
-Prediction → Actual result → Error → Reliability → Calibration → Challenger → Compare → Promote only if better
-                         ↘ drift detection / failure detection / rollback ↗
+STAGE 1  FOUNDATION
+OHLCV → Features → Indicators → XGBoost → Time-series validation → Accuracy
+   ↓
+STAGE 2  PRODUCTION PREDICTION
+NSE universe → Data quality → OHLCV → Direction → +5% Jump → Intraday → Evaluation → Champion/Challenger → Telegram
+   ↓
+STAGE 3  ADVANCED FORECASTING
+Price Buckets → 1D / 3D / 5D / 7D / 20D forecasts
+   ↓
+STAGE 4  MARKET INTELLIGENCE
+Market regime → Sector strength → Rotation → Breadth → Ranking → Risk intelligence
+   ↓
+STAGE 5  ACCURACY & CALIBRATION
+Walk-forward → Rolling accuracy → Stock/horizon accuracy → Direction → Error analysis → Calibration
+   ↓
+STAGE 6  ADAPTIVE AI
+Error learning → Reliability → Regime learning → Dynamic weighting → Feature importance → Adaptive retraining
+   ↓
+STAGE 7  ADVANCED MARKET INTELLIGENCE
+NIFTY → BANK NIFTY → Breadth → Volatility → Relative strength → Correlation → FII/DII → Global influence
+   ↓
+STAGE 8  EVENT & NEWS INTELLIGENCE
+News → Sentiment → Events → Earnings → Corporate actions → Event risk → Price/news confirmation
+   ↓
+STAGE 9  DECISION INTELLIGENCE
+BUY/HOLD/AVOID → Expected return → Probability → Risk-adjusted return → Target → Stop risk → Reward/Risk → Final score
+   ↓
+STAGE 10  SELF-IMPROVING AI
+Continuous learning → Model/feature/regime drift → Failure detection → Champion/Challenger → Replacement → Monitoring → Rollback
 ```
 
-Persistent state remains **GitHub-only** under `data/stage2/`; there is no local database. GitHub Actions commits generated state/data back to the repository.
+## Daily workflow
+
+```text
+                    ┌───────────────┐
+                    │  NSE UNIVERSE │
+                    └───────┬───────┘
+                            ↓
+                    DATA QUALITY GATE
+                            ↓
+             ┌──────────────┴──────────────┐
+             ↓                             ↓
+       AI PREDICTION                 INTRADAY SCAN
+             ↓                             ↓
+       PRICE BUCKETS                  TOP SETUPS
+             ↓                             ↓
+       DECISION ENGINE ← MARKET / SECTOR / RISK
+             ↓
+       MORNING TELEGRAM
+             ↓
+       MARKET CLOSE
+             ↓
+       ACTUAL vs PREDICTED
+             ↓
+       ACCURACY + ERROR ANALYSIS
+             ↓
+       CHALLENGER / RETRAINING
+             ↓
+       EVENING TELEGRAM
+             ↓
+       GITHUB STATE UPDATE
+```
+
+## Morning Telegram report
+
+The report is intentionally **decision-focused and mobile-friendly**. It does not add unnecessary tables or duplicate information.
+
+### 1. Top 5 AI Stocks
+
+Each selected stock includes:
+
+- **Price Bucket** — price-band classification used for balanced coverage.
+- Current **CMP + Open + High + Low + Close + Volume**.
+- **AI Target** / predicted close.
+- **Expected %** move from CMP to AI target.
+- **Stop Loss** when available.
+- **Risk/Reward** when calculable.
+- **Confidence**.
+- **AI Decision** — BUY / HOLD / WATCH / AVOID.
+
+Selection is subject to data, liquidity, model-confidence and quality controls; weak stocks are not added merely to fill the list.
+
+### 2. +5% Jump Watch
+
+Up to 5 candidates with:
+
+- CMP
+- +5% target
+- target percentage
+- estimated 7-session upside
+- probability
+
+Candidates are subject to the jump-quality gates rather than being presented as guaranteed movers.
+
+### 3. Intraday
+
+Up to 5 qualified setups with:
+
+- Bias
+- CMP
+- Target
+- Stop Loss
+- Confidence
+
+If no setup passes the live quality gates, the report explicitly says so.
+
+### Other morning intelligence
+
+- Market snapshot: NIFTY, BANK NIFTY, VIX and breadth.
+- Market regime.
+- Sector AI strength.
+- IPO / new-listing information when verified data is available.
+- Portfolio Manager summary and position alerts.
+- Scan funnel showing universe → data → liquid → AI → selected counts.
+- Compact previous → current model accuracy.
+- Model-health warning when health/drift is weak; recommendation confidence is reduced rather than hiding the warning.
+
+## Price buckets
+
+Price buckets are part of the **core selection and reporting layer**, not a separate afterthought.
+
+The report identifies the price band for every selected stock so the final list can be inspected across different price levels instead of unintentionally concentrating in one range.
+
+The bucket shown in Telegram is derived from the stock-selection data and remains visible beside the stock name.
+
+## Evening Telegram report
+
+```text
+PREDICTION vs ACTUAL
+        ↓
+PRED OHLC
+ACT  OHLC
+DIFF OHLC
+        ↓
+Direction: Predicted → Actual
+        ↓
+Price-bucket results
+Intraday results
+IPO/new-listing results
+        ↓
+Model Learning
+Samples → MAPE → Direction Accuracy
+Previous → Current Accuracy
+Champion/Challenger
+Retrained? → Improvement → Learning State
+```
+
+The evening report is the validation layer. It measures what actually happened instead of treating a prediction as success merely because it was generated.
+
+## Self-improving learning loop
+
+```text
+Prediction
+    ↓
+Actual market result
+    ↓
+Error measurement
+    ↓
+Accuracy / reliability
+    ↓
+Calibration + drift detection
+    ↓
+Challenger model
+    ↓
+Compare with champion
+    ↓
+Promote only when the challenger is better
+    ↓
+Continue learning
+```
+
+Model replacement is therefore performance-driven rather than automatic retraining for its own sake.
+
+## Data integrity
+
+- Missing optional external information is not fabricated.
+- FII/DII, global and news inputs remain neutral when no verified source is available.
+- Future information must not leak into historical prediction/evaluation.
+- Actual market data is used for post-market validation.
+- Reports distinguish predictions from verified actual results.
+
+## Persistence
+
+Generated state and model/report data are persisted **GitHub-only** under the repository data/state paths. The project does not depend on a local database for its persistent learning state.
+
+GitHub Actions can run the scheduled morning/evening/weekly jobs and commit generated state back to the repository.
 
 ## Current release
 
-- `STAGE_NAME = Stage 10 (Final Self-Improving AI)`
-- `MODEL_VERSION = stage10-v1.0`
-- Universe cap: 1,000 liquid NSE stocks
-- Forecast horizons: 1, 3, 5, 7 and 20 sessions
-- Existing champion/challenger retraining preserved
-- Final regression suite covers Stages 1–10 architecture
+- **Stage:** Stage 10 — Final Self-Improving AI
+- **Model version:** `stage10-v1.0`
+- **Forecast horizons:** 1D, 3D, 5D, 7D and 20D
+- **Selection:** quality-gated Top 5 reporting with price-bucket visibility
+- **Intraday:** quality-gated Top 5
+- **Jump Watch:** quality-gated Top 5
+- **Validation:** prediction vs actual + direction accuracy + error metrics
+- **Learning:** champion/challenger + drift/failure controls
+- **Reporting:** mobile-first Telegram morning and evening reports
 
 ## Manual runs
 
@@ -72,4 +212,20 @@ Persistent state remains **GitHub-only** under `data/stage2/`; there is no local
 python -m src.morning_runner
 python -m src.evening
 python -m src.weekly_report
+```
+
+## Repository structure
+
+```text
+src/                    Core prediction, screening, intelligence and reporting code
+.github/workflows/      Scheduled GitHub Actions workflows
+data/                   GitHub-persisted state and generated data
+models/                 Saved model artifacts
+reports/                Generated reports
+main.py                 Main entry point
+morning.py              Morning entry point
+evening.py              Evening entry point
+weekly_report.py        Weekly reporting entry point
+requirements.txt        Python dependencies
+tests/                  Regression and pipeline tests
 ```
