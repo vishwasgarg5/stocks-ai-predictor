@@ -4,23 +4,23 @@ Production release combining **price-bucket selection + multi-horizon forecastin
 
 ## Morning Telegram — only 3 sections
 
-1. **Top stocks by price bucket** — only quality-qualified stocks with predicted **Open / High / Low / Close / Volume**.
-2. **+5% jump watch** — candidates with a modeled path toward +5% within 7 trading sessions.
-3. **Intraday stocks** — only actionable UP/DOWN setups passing stricter quality and volume filters.
+1. **Top stocks by price bucket** — up to **2 qualified stocks in each of 5 price buckets** (maximum 10), with predicted **Open / High / Low / Close / Volume**.
+2. **+5% jump watch** — only candidates passing both a modeled probability gate and minimum 7-session upside estimate.
+3. **Intraday stocks** — only actionable UP/DOWN setups passing stricter score, volume and confidence filters; when none qualify, the report shows the scan/rejection summary.
 
-The model does **not** force five stocks. If only two qualify, only two are reported.
+The model never pads the list with weak stocks. A bucket can have 0, 1 or 2 stocks.
 
 ## Price buckets
 
-| Bucket | Current Price |
-|---|---:|
-| B1 | > ₹1,000 |
-| B2 | ₹500–₹999 |
-| B3 | ₹100–₹499 |
-| B4 | ₹50–₹99 |
-| B5 | ₹10–₹49 |
+| Bucket | Current Price | Maximum |
+|---|---:|---:|
+| B1 | > ₹1,000 | 2 |
+| B2 | ₹500–₹999 | 2 |
+| B3 | ₹100–₹499 | 2 |
+| B4 | ₹50–₹99 | 2 |
+| B5 | ₹10–₹49 | 2 |
 
-Buckets provide diversification but never force a weak stock into the final list.
+Buckets provide diversification without forcing a weak stock into the final list.
 
 ## Prediction engines
 
@@ -30,7 +30,7 @@ Buckets provide diversification but never force a weak stock into the final list
 - Multi-horizon expected return contributes to final ranking.
 - Expensive multi-horizon models run only for the small post-bucket candidate pool.
 
-## Stage 4.2 intelligence
+## Stage 4.2 intelligence and quality controls
 
 - Broad NSE universe capped at 1,000 stocks.
 - Liquidity and technical prescreening.
@@ -38,7 +38,12 @@ Buckets provide diversification but never force a weak stock into the final list
 - Cached Yahoo Finance sector mapping.
 - Sector momentum and relative strength.
 - Evidence-weighted historical stock reliability.
-- Quality gates prevent weak predictions from filling the Top list.
+- **Trade Confidence** is separate from raw model confidence.
+- Direction-vs-return alignment detects conflicts such as `UP` direction with a strongly negative predicted return.
+- Multi-horizon directional agreement contributes to Trade Confidence.
+- Final quality gate uses score, model confidence, trade confidence and signal alignment.
+- Jump Watch rejects weak probability/upside combinations instead of filling five rows.
+- Intraday engine records rejection reasons and reports the funnel when no setup qualifies.
 
 ### Ranking weights
 
@@ -58,13 +63,15 @@ Buckets provide diversification but never force a weak stock into the final list
 
 Morning prediction uses the latest completed equity session available before the prediction date and never today's partial bar. Persistent state is GitHub-only; there is no local database.
 
-Evening evaluation compares predicted vs actual OHLCV, maintains cumulative accuracy metrics, updates reliability and retains champion/challenger retraining.
+Evening evaluation compares every saved prediction against actual OHLCV, maintains cumulative accuracy metrics, updates stock reliability and retains champion/challenger retraining.
 
 ## Schedule
 
 - Morning: **5:00 AM IST**, Monday–Friday
 - Evening: **4:30 PM IST**, Monday–Friday
 - Weekly: **6:00 PM IST Friday**
+
+GitHub supports timezone-aware scheduled workflows, although scheduled runs can occasionally be delayed by Actions load. citeturn0search0turn0search3
 
 ## Manual runs
 
