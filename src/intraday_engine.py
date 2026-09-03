@@ -7,101 +7,64 @@ from .utils import clean_ohlcv
 
 def download_intraday(symbol):
     try:
-        return clean_ohlcv(yf.download(f"{symbol}.NS", period=INTRADAY_PERIOD, interval=INTRADAY_INTERVAL,
-                                        auto_adjust=False, progress=False, threads=False))
+        return clean_ohlcv(yf.download(f"{symbol}.NS", period=INTRADAY_PERIOD, interval=INTRADAY_INTERVAL, auto_adjust=False, progress=False, threads=False))
     except Exception as exc:
         print(f"{symbol}: intraday data failed: {exc}")
         return pd.DataFrame()
 
 
 def add_intraday_features(df):
-    x = df.copy()
-    close, high, low, volume = x["Close"], x["High"], x["Low"], x["Volume"]
-    day = pd.Series(x.index.date, index=x.index)
-    typical = (high + low + close) / 3
+    x = df.copy(); close, high, low, volume = x["Close"], x["High"], x["Low"], x["Volume"]
+    day = pd.Series(x.index.date, index=x.index); typical = (high + low + close) / 3
     x["VWAP"] = (typical * volume).groupby(day).cumsum() / volume.groupby(day).cumsum().replace(0, np.nan)
-    x["EMA9"] = close.ewm(span=9, adjust=False).mean()
-    x["EMA20"] = close.ewm(span=20, adjust=False).mean()
-    x["VolumeMA20"] = volume.rolling(20).mean()
-    x["RelativeVolume"] = volume / x["VolumeMA20"].replace(0, np.nan)
-    x["Return1"] = close.pct_change()
-    x["Return4"] = close.pct_change(4)
-    x["Range"] = (high - low) / close.replace(0, np.nan)
-    x["Momentum"] = close / close.shift(8) - 1
-    x["DayHigh"] = x.groupby(day)["High"].transform("max")
-    x["DayLow"] = x.groupby(day)["Low"].transform("min")
+    x["EMA9"] = close.ewm(span=9, adjust=False).mean(); x["EMA20"] = close.ewm(span=20, adjust=False).mean()
+    x["VolumeMA20"] = volume.rolling(20).mean(); x["RelativeVolume"] = volume / x["VolumeMA20"].replace(0, np.nan)
+    x["Return1"] = close.pct_change(); x["Return4"] = close.pct_change(4); x["Range"] = (high - low) / close.replace(0, np.nan)
+    x["Momentum"] = close / close.shift(8) - 1; x["DayHigh"] = x.groupby(day)["High"].transform("max"); x["DayLow"] = x.groupby(day)["Low"].transform("min")
     return x.replace([np.inf, -np.inf], np.nan)
 
 
 def calculate_intraday_setup(df):
-    if df.empty:
-        return None, "NO_DATA"
+    if df.empty: return None, "NO_DATA"
     x = add_intraday_features(df).dropna()
-    if len(x) < INTRADAY_MIN_ROWS:
-        return None, "INSUFFICIENT_DATA"
-    row = x.iloc[-1]
-    current, vwap, ema9, ema20 = map(float, (row["Close"], row["VWAP"], row["EMA9"], row["EMA20"]))
-    relative_volume, momentum, range_pct = float(row["RelativeVolume"]), float(row["Momentum"]), float(row["Range"])
-    score = 50.0
-    score += 12 if current > vwap else -12
-    score += 10 if ema9 > ema20 else -8
-    score += 12 if relative_volume > 1.5 else 5 if relative_volume > 1.1 else 0
-    score += 10 if momentum > 0.01 else -10 if momentum < -0.01 else 0
-    score += 6 if range_pct > 0.015 else 0
-    score = float(np.clip(score, 0, 100))
-    bias = "UP" if score >= 60 else "DOWN" if score <= 40 else "NEUTRAL"
-    if bias == "NEUTRAL":
-        return None, "NEUTRAL"
-    if score < 70:
-        return None, "LOW_SCORE"
-    if relative_volume < 1.10:
-        return None, "LOW_RELATIVE_VOLUME"
-    expected_move = max(abs(momentum), range_pct * 1.5, INTRADAY_MIN_MOVE)
-    if bias == "UP":
-        target, stop_loss = current * (1 + expected_move), current * (1 - expected_move * 0.55)
-    else:
-        target, stop_loss = current * (1 - expected_move), current * (1 + expected_move * 0.55)
-    confidence = min(95.0, 50 + abs(score - 50) * 0.7 + min(relative_volume, 3) * 5)
-    if confidence < 65:
-        return None, "LOW_CONFIDENCE"
-    return {"Current": current, "Bias": bias, "Target": target, "StopLoss": stop_loss,
-            "ExpectedMove": expected_move * 100, "Score": score, "Confidence": confidence,
-            "RelativeVolume": relative_volume, "VWAP": vwap, "EMA9": ema9, "EMA20": ema20}, "QUALIFIED"
+    if len(x) < INTRADAY_MIN_ROWS: return None, "INSUFFICIENT_DATA"
+    row=x.iloc[-1]; current,vwap,ema9,ema20=map(float,(row["Close"],row["VWAP"],row["EMA9"],row["EMA20"]))
+    relative_volume,momentum,range_pct=float(row["RelativeVolume"]),float(row["Momentum"]),float(row["Range"])
+    score=50.0; score += 12 if current>vwap else -12; score += 10 if ema9>ema20 else -8
+    score += 12 if relative_volume>1.5 else 5 if relative_volume>1.1 else 0; score += 10 if momentum>0.01 else -10 if momentum<-0.01 else 0
+    score += 6 if range_pct>0.015 else 0; score=float(np.clip(score,0,100)); bias="UP" if score>=60 else "DOWN" if score<=40 else "NEUTRAL"
+    if bias=="NEUTRAL": return None,"NEUTRAL"
+    if score<70: return None,"LOW_SCORE"
+    if relative_volume<1.10: return None,"LOW_RELATIVE_VOLUME"
+    expected_move=max(abs(momentum),range_pct*1.5,INTRADAY_MIN_MOVE)
+    if bias=="UP": target,stop_loss=current*(1+expected_move),current*(1-expected_move*0.55)
+    else: target,stop_loss=current*(1-expected_move),current*(1+expected_move*0.55)
+    confidence=min(95.0,50+abs(score-50)*0.7+min(relative_volume,3)*5)
+    if confidence<65: return None,"LOW_CONFIDENCE"
+    return {"Current":current,"Bias":bias,"Target":target,"StopLoss":stop_loss,"ExpectedMove":expected_move*100,"Score":score,"Confidence":confidence,"RelativeVolume":relative_volume,"VWAP":vwap,"EMA9":ema9,"EMA20":ema20},"QUALIFIED"
 
 
-def generate_intraday_watchlist(symbols, max_workers=6):
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    data = {}
+def generate_intraday_watchlist(symbols,max_workers=6):
+    from concurrent.futures import ThreadPoolExecutor,as_completed
+    data={}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(download_intraday, symbol): symbol for symbol in symbols}
+        futures={executor.submit(download_intraday,symbol):symbol for symbol in symbols}
         for future in as_completed(futures):
-            symbol = futures[future]
+            symbol=futures[future]
             try:
-                df = future.result()
-                if not df.empty:
-                    data[symbol] = df
-            except Exception as exc:
-                print(f"{symbol}: {exc}")
-
-    counts = {"SCANNED": len(symbols), "DATA_AVAILABLE": len(data), "NO_DATA": max(0, len(symbols) - len(data)),
-              "INSUFFICIENT_DATA": 0, "NEUTRAL": 0, "LOW_SCORE": 0, "LOW_RELATIVE_VOLUME": 0,
-              "LOW_CONFIDENCE": 0, "QUALIFIED": 0}
-    results = []
-    for symbol, df in data.items():
+                df=future.result()
+                if not df.empty: data[symbol]=df
+            except Exception as exc: print(f"{symbol}: {exc}")
+    counts={"SCANNED":len(symbols),"DATA_AVAILABLE":len(data),"NO_DATA":max(0,len(symbols)-len(data)),"INSUFFICIENT_DATA":0,"NEUTRAL":0,"LOW_SCORE":0,"LOW_RELATIVE_VOLUME":0,"LOW_CONFIDENCE":0,"QUALIFIED":0}
+    results=[]
+    for symbol,df in data.items():
         try:
-            setup, reason = calculate_intraday_setup(df)
-            counts[reason] = counts.get(reason, 0) + 1
-            if setup is not None:
-                counts["QUALIFIED"] += 1
-                results.append({"Symbol": symbol, **setup})
-        except Exception as exc:
-            print(f"{symbol}: setup failed: {exc}")
-
+            setup,reason=calculate_intraday_setup(df); counts[reason]=counts.get(reason,0)+1
+            if setup is not None: results.append({"Symbol":symbol,**setup})
+        except Exception as exc: print(f"{symbol}: setup failed: {exc}")
+    counts["QUALIFIED"]=len(results)
     if not results:
-        empty = pd.DataFrame()
-        empty.attrs["scan_stats"] = counts
-        return empty
-    result = pd.DataFrame(results).sort_values(["Score", "Confidence"], ascending=False).head(INTRADAY_TOP_N).reset_index(drop=True)
-    counts["RETURNED"] = len(result)
-    result.attrs["scan_stats"] = counts
+        empty=pd.DataFrame(); empty.attrs["scan_stats"]=counts; return empty
+    result=pd.DataFrame(results).sort_values(["Score","Confidence"],ascending=False).head(INTRADAY_TOP_N).reset_index(drop=True)
+    counts["RETURNED"]=len(result); result.attrs["scan_stats"]=counts
     return result
