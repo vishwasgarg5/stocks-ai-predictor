@@ -5,7 +5,7 @@ import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]
 REQUIRED_SOURCE_FILES=["src/__init__.py","src/config.py","src/features.py","src/market_data.py","src/models.py","src/prediction.py","src/multihorizon.py","src/selection.py","src/stage4_engine.py","src/stage45_engine.py","src/final_intelligence.py","src/evaluation.py","src/retraining.py","src/ledger.py","src/morning_runner.py","src/telegram_report.py","src/weekly_report.py"]
 REQUIRED_WORKFLOWS=[".github/workflows/stage2_morning.yml",".github/workflows/stage2_evening.yml",".github/workflows/stage2_weekly.yml"]
-FORBIDDEN_LEGACY_PATHS=[".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv"]
+FORBIDDEN_LEGACY_PATHS=[".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.yml",".github/workflows/stage4_tests.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv"]
 CORE_MODULES=["src.config","src.features","src.market_data","src.models","src.prediction","src.multihorizon","src.selection","src.stage4_engine","src.stage45_engine","src.final_intelligence","src.evaluation","src.retraining","src.ledger"]
 
 def test_required_source_files_exist():
@@ -122,4 +122,4 @@ def test_stage10_end_to_end_integration_smoke():
     final=apply_final_intelligence(selected,regime="BULL",breadth=70,news=65)
     assert len(final)==1 and final.iloc[0]["Action"] in {"BUY","WATCH","HOLD","AVOID"}
     report=morning_report("2026-09-03","2026-09-02",final,pd.DataFrame(),pd.DataFrame(),accuracy={"PreviousAccuracy":70,"CurrentAccuracy":72},scan={"Universe":100,"Data":90,"Liquid":80,"AI":40,"Selected":1})
-    assert "TEST" in report and "Price Bucket" in report and "AI Target" in report and "1. TOP 5 AI STOCKS" in report
+    assert "TEST" in report and "Price Bucket" in report and "AI Target" in report and "1. TOP STOCKS" in report
