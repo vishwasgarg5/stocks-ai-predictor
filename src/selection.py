@@ -14,7 +14,6 @@ def load_reliability():
             mape = float(r.get("MAPE", 3) or 3)
             direction = float(r.get("DirectionAccuracy", 50) or 50)
             samples = float(r.get("Samples", 0) or 0)
-            # Reliability improves only when there is enough historical evidence.
             evidence = min(samples / 20.0, 1.0)
             raw = 0.55 * clamp(100 - mape * 20) + 0.45 * direction
             out[str(r["Symbol"])] = 50 + evidence * (raw - 50)
@@ -28,7 +27,6 @@ def expected_return_score(v):
 
 
 def multi_horizon_score(v):
-    """Convert average multi-horizon expected return into a stable 0-100 score."""
     try:
         return clamp(50 + float(v) * 4)
     except Exception:
@@ -45,8 +43,51 @@ def regime_direction_score(d, regime):
     return {"UP": 70, "NEUTRAL": 55, "DOWN": 45}.get(d, 50)
 
 
+def direction_return_alignment(direction, expected_return):
+    """Measure agreement between classifier direction and regression return."""
+    try:
+        r = float(expected_return)
+    except Exception:
+        return 50.0
+    d = str(direction).upper()
+    if d == "UP":
+        return clamp(50 + r * 25)
+    if d == "DOWN":
+        return clamp(50 - r * 25)
+    return clamp(100 - abs(r) * 20)
+
+
+def horizon_alignment(row):
+    """Reward multi-horizon forecasts that agree with the 1D direction."""
+    values = []
+    for h in (1, 3, 5, 7, 20):
+        key = f"Horizon_{h}D"
+        if key in row and pd.notna(row[key]):
+            values.append(float(row[key]))
+    if not values:
+        return 50.0
+    direction = str(row.get("Direction", "NEUTRAL")).upper()
+    if direction == "UP":
+        agreeing = sum(v > 0 for v in values)
+    elif direction == "DOWN":
+        agreeing = sum(v < 0 for v in values)
+    else:
+        agreeing = sum(abs(v) <= 1.5 for v in values)
+    return 100.0 * agreeing / len(values)
+
+
+def calculate_trade_confidence(row):
+    """Separate trade quality from raw model confidence."""
+    return clamp(
+        0.35 * float(row.get("Confidence", 50))
+        + 0.20 * float(row.get("Direction_Confidence", 50))
+        + 0.20 * direction_return_alignment(row.get("Direction", "NEUTRAL"), row.get("Expected_Return", 0))
+        + 0.10 * float(row.get("ReliabilityScore", 50))
+        + 0.15 * horizon_alignment(row)
+    )
+
+
 def calculate_score(row, regime):
-    # Stage 4.2 weights: multi-horizon is now a real ranking component.
     return clamp(
         0.18 * float(row.get("TechnicalScore", 50))
         + 0.15 * expected_return_score(row.get("Expected_Return", 0))
@@ -65,18 +106,29 @@ def score_candidates(candidates, regime="SIDEWAYS"):
     df = candidates.copy()
     reliability = load_reliability()
     df["ReliabilityScore"] = df["Symbol"].map(reliability).fillna(50.0)
+    df["TradeConfidence"] = df.apply(calculate_trade_confidence, axis=1)
+    df["TradeQuality"] = df["TradeConfidence"].map(lambda x: "HIGH" if x >= 75 else "MEDIUM" if x >= 60 else "LOW")
+    df["DirectionReturnAlignment"] = df.apply(lambda r: direction_return_alignment(r.get("Direction", "NEUTRAL"), r.get("Expected_Return", 0)), axis=1)
     df["Score"] = df.apply(lambda r: calculate_score(r, regime), axis=1)
-    return df.sort_values(["Score", "Confidence", "Direction_Confidence", "SectorScore"], ascending=False).reset_index(drop=True)
+    return df.sort_values(["TradeConfidence", "Score", "Confidence", "Direction_Confidence", "SectorScore"], ascending=False).reset_index(drop=True)
 
 
-def select_top_stocks(candidates, top_n=5, regime="SIDEWAYS", min_score=65.0, min_confidence=60.0):
-    """Return only quality-qualified stocks; never pad the result to top_n."""
+def select_top_stocks(candidates, top_n=10, regime="SIDEWAYS", min_score=65.0, min_confidence=60.0, min_trade_confidence=60.0, max_per_bucket=2):
+    """Select up to two quality stocks per price bucket; never pad weak results."""
     scored = score_candidates(candidates, regime)
     if scored.empty:
         return scored
-    qualified = scored[(scored["Score"] >= min_score) & (scored["Confidence"] >= min_confidence)]
+    qualified = scored[
+        (scored["Score"] >= min_score)
+        & (scored["Confidence"] >= min_confidence)
+        & (scored["TradeConfidence"] >= min_trade_confidence)
+        & (scored["DirectionReturnAlignment"] >= 35.0)
+    ].copy()
     if qualified.empty:
-        # In an unusually weak market, still return the single best model result
-        # rather than fabricating a five-stock list.
-        return scored.head(1).reset_index(drop=True)
-    return qualified.head(top_n).reset_index(drop=True)
+        return qualified.reset_index(drop=True)
+    pieces = []
+    for bucket, group in qualified.groupby("PriceBucket", sort=False):
+        pieces.append(group.sort_values(["TradeConfidence", "Score"], ascending=False).head(max_per_bucket))
+    selected = pd.concat(pieces, ignore_index=True) if pieces else qualified.iloc[0:0]
+    selected = selected.sort_values(["TradeConfidence", "Score"], ascending=False).head(top_n)
+    return selected.reset_index(drop=True)
