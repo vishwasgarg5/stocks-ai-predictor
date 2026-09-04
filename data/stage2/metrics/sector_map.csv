@@ -1,7 +1,12 @@
 Symbol,Sector
+20MICRONS,Basic Materials
+63MOONS,Technology
+ACMESOLAR,Utilities
 ADOR,Industrials
+AEGISVOPAK,Energy
 AEROENTER,Basic Materials
 AEROFLEX,Industrials
+AGI,Consumer Cyclical
 AHCL,Healthcare
 AKUMS,Healthcare
 ALEMBICLTD,Real Estate
@@ -9,6 +14,7 @@ ALIVUS,Healthcare
 ALKYLAMINE,Basic Materials
 ALLCARGO,Industrials
 ANTHEM,Healthcare
+APCOTEXIND,Basic Materials
 ARIES,Basic Materials
 ARIHANTCAP,Financial Services
 ASIANENE,Energy
@@ -16,23 +22,35 @@ ATHERENERG,Consumer Cyclical
 ATLANTAELE,Industrials
 AUROPHARMA,Healthcare
 AWL,Consumer Defensive
+AXISBANK,Financial Services
+AXISCADES,Industrials
 BAJAJHIND,Consumer Defensive
 BALMLAWRIE,Industrials
 BBTC,Consumer Defensive
 BEL,Industrials
 BEML,Industrials
+BESTAGRO,Basic Materials
 BHEL,Industrials
 BIRLACABLE,Technology
+BLUSPRING,Industrials
 BPCL,Energy
 BRIGADE,Real Estate
 CANHLIFE,Financial Services
 CANTABIL,Consumer Cyclical
 CARTRADE,Consumer Cyclical
 CDSL,Financial Services
+CENTENKA,Consumer Cyclical
+CLEAN,Basic Materials
+COALINDIA,Energy
+COFORGE,Technology
 COHANCE,Healthcare
+CONFIPET,Energy
 CONTROLPR,Industrials
 CRAFTSMAN,Consumer Cyclical
+CRISIL,Financial Services
 CSBBANK,Financial Services
+CUB,Financial Services
+DCW,Basic Materials
 DEN,Communication Services
 DIVISLAB,Healthcare
 DLF,Real Estate
@@ -44,18 +62,28 @@ EDELWEISS,Financial Services
 EFCIL,Real Estate
 ELGIEQUIP,Industrials
 EPIGRAL,Basic Materials
+EXPLEOSOL,Technology
 FCL,Basic Materials
 FEDFINA,Financial Services
+FOSECOIND,Basic Materials
 GARFIBRES,Consumer Cyclical
 GCSL,Financial Services
 GENUSPOWER,Industrials
 GEOJITFSL,Financial Services
+GLAXO,Healthcare
 GLENMARK,Healthcare
+GOCLCORP,Basic Materials
+GPPL,Industrials
+GSFC,Basic Materials
+GUFICBIO,Healthcare
 GUJALKALI,Basic Materials
 HCC,Industrials
 HFCL,Technology
+HIKAL,Healthcare
 HINDOILEXP,Energy
 HINDZINC,Basic Materials
 HNDFDS,Industrials
+HOMEFIRST,Financial Services
 ICICIBANK,Financial Services
+ICIL,Consumer Cyclical
 IDEA,Communication Services

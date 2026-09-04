@@ -1,0 +1,42 @@
+{
+  "version": "final-v3",
+  "observations": [
+    {
+      "date": "2026-09-04",
+      "regime": "SIDEWAYS",
+      "selected": [
+        {
+          "Symbol": "BAJAJHIND",
+          "FinalDecisionScore": 70.7864803099263,
+          "Action": "WATCH",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "ATLANTAELE",
+          "FinalDecisionScore": 69.34506262179143,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "COFORGE",
+          "FinalDecisionScore": 68.89934578295643,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "63MOONS",
+          "FinalDecisionScore": 67.57295798112972,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "EBGNG",
+          "FinalDecisionScore": 67.22429501450196,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        }
+      ]
+    }
+  ],
+  "last_update": "2026-09-04"
+}
