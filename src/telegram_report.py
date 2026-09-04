@@ -61,17 +61,38 @@ def _decision(r, expected, rr, warning=False):
 
 
 def _horizon_lines(r):
+    """Compact transposed horizon table: one row for targets, one for expected returns."""
     cmp = float(r.get("Current_Price", r.get("Current_Close", 0)) or 0)
-    lines=["Horizon | Target | Exp%", "--------|--------|-----"]
-    for h in (1,3,5,7,20):
-        value=r.get(f"Horizon_{h}D")
+    horizons = (1, 3, 5, 7, 20)
+    targets, returns = [], []
+    for h in horizons:
+        value = r.get(f"Horizon_{h}D")
         try:
-            ret=float(value)
-            target=cmp*(1+ret/100.0) if cmp else 0
-            lines.append(f"{h}D | ₹{_fmt(target)} | {_pct(ret)}")
-        except (TypeError,ValueError):
-            lines.append(f"{h}D | - | -")
-    return lines
+            ret = float(value)
+            targets.append(f"₹{_fmt(cmp * (1 + ret / 100.0)) if cmp else '-'}")
+            returns.append(_pct(ret))
+        except (TypeError, ValueError):
+            targets.append("-")
+            returns.append("-")
+    return [
+        "Horizon | 1D | 3D | 5D | 7D | 20D",
+        "Target  | " + " | ".join(targets),
+        "Exp%    | " + " | ".join(returns),
+    ]
+
+
+def _ohlcv_lines(r, cmp):
+    """Compact OHLCV table to reduce vertical report length."""
+    return [
+        "OHLCV | Open | High | Low | Close | Volume",
+        "      | " + " | ".join([
+            _fmt(r.get("Current_Open")),
+            _fmt(r.get("Current_High")),
+            _fmt(r.get("Current_Low")),
+            _fmt(r.get("Current_Close", cmp)),
+            _fmt(r.get("Current_Volume"), 0),
+        ]),
+    ]
 
 
 def _stock_card(r, warning=False):
@@ -87,9 +108,8 @@ def _stock_card(r, warning=False):
         f"*{r.get('Symbol', '-')}*   |   *{decision}*",
         f"CMP ₹{_fmt(cmp)}",
         *_horizon_lines(r),
-        f"O {_fmt(r.get('Current_Open'))}  H {_fmt(r.get('Current_High'))}  L {_fmt(r.get('Current_Low'))}  C {_fmt(r.get('Current_Close', cmp))}",
-        f"Vol {_fmt(r.get('Current_Volume'), 0)}   •   SL {sl_text}   •   R/R {rr}",
-        f"Confidence  *{float(r.get('Confidence', 0) or 0):.0f}%*",
+        *_ohlcv_lines(r, cmp),
+        f"SL {sl_text}   •   R/R {rr}   •   Confidence *{float(r.get('Confidence', 0) or 0):.0f}%*",
     ]
 
 
