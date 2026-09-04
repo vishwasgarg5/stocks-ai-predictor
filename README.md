@@ -1,6 +1,6 @@
-# AI NSE Stock Predictor — Stage 10
+# AI NSE Stock Predictor — Stage 10.1
 
-Production-oriented NSE stock prediction and decision-support system covering the cumulative **Stage 1 → Stage 10** pipeline.
+Production-oriented NSE stock prediction and decision-support system covering the cumulative **Stage 1 → Stage 10.1** pipeline.
 
 > Predictions are model outputs, not guaranteed returns or investment advice.
 
@@ -23,7 +23,7 @@ MARKET + SECTOR + RISK
     ↓
 CONFIDENCE + DECISION ENGINE
     ↓
-TOP 5 AI STOCKS
+BEST QUALIFIED PICK FROM EACH PRICE BUCKET
     ↓
 +5% JUMP WATCH TOP 5
     ↓
@@ -42,7 +42,7 @@ CHAMPION / CHALLENGER
 GITHUB STATE UPDATE
 ```
 
-## Stage 1 → 10
+## Stage 1 → 10.1
 
 ```text
 1 Foundation
@@ -64,21 +64,45 @@ GITHUB STATE UPDATE
 9 Decision intelligence
    ↓
 10 Self-improving AI
+   ↓
+10.1 Precision + bucket-wise decision/reporting
 ```
 
-## Morning report
+## Stage 10.1 morning report
 
-Exactly **3 actionable sections**:
+The **Top Stocks** section is no longer globally limited to five stocks.
 
-1. **Top Stocks** — maximum 5 quality-gated stocks.
-2. **+5% Jump Watch** — maximum 5 qualified candidates.
-3. **Intraday Stocks** — maximum 5 qualified setups.
+The model evaluates the configured price buckets independently and returns **the single best qualified stock from each bucket**. Buckets with no qualified stock are omitted rather than filled with weak candidates.
 
-Top stocks show Price Bucket, CMP, current OHLCV, AI Target, Expected %, Stop Loss when available, R/R when calculable, Confidence and AI Decision.
+Each bucket has its **own separate Telegram table** containing:
+
+- Stock
+- CMP
+- Open
+- High
+- Low
+- Close
+- Volume
+- AI Target
+- Expected %
+- Stop Loss
+- R/R
+- Confidence
+- Decision
+
+Current configured buckets:
+
+```text
+>1000
+500-999
+100-499
+50-99
+10-49
+```
+
+The final number of Top Stock picks is therefore dynamic (up to one per configured bucket), not an arbitrary global Top-5 cap.
 
 Supporting information includes market snapshot, sector strength, IPO/new-listing information when verified, portfolio snapshot, scan counts, model accuracy and model-health warnings.
-
-The system never fills the list with weak stocks just to reach five.
 
 ## Evening report
 
@@ -98,7 +122,7 @@ MODEL LEARNING
 CHAMPION / CHALLENGER
 ```
 
-The evening job validates predictions against the completed market session and updates reliability/learning state.
+The evening job validates the bucket-selected predictions against the completed market session and updates reliability/learning state.
 
 ## Self-improving AI
 
@@ -114,12 +138,13 @@ The model tracks prediction error, direction accuracy, stock reliability, confid
 
 ## Current release
 
-- **Stage:** Stage 10 — Final Self-Improving AI
-- **Model:** `stage10-v1.1`
+- **Stage:** Stage 10.1 — Precision & Bucket Decision AI
+- **Model:** `stage10.1-v1.0`
 - **Forecasts:** 1D, 3D, 5D, 7D, 20D
 - **Universe cap:** 1,000 NSE stocks
-- **Final AI selection:** Top 5
-- **Price-bucket limit:** maximum 2 per bucket
+- **AI prescreen:** 60 candidates
+- **Final selection:** best qualified stock per price bucket
+- **Price-bucket candidate pool:** maximum 2 per bucket before final precision selection
 - **Jump Watch:** Top 5
 - **Intraday:** Top 5
 - **Validation:** OHLCV error + direction accuracy
@@ -148,7 +173,7 @@ python -m src.weekly_report
 ## Repository structure
 
 ```text
-src/                    Core Stage 10 application
+src/                    Core Stage 10.1 application
 .github/workflows/      Morning / Evening / Weekly only
 data/stage2/            GitHub-persisted predictions, evaluations and state
 portfolio_manager/      Separate portfolio-manager project components
