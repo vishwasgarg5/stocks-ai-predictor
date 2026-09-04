@@ -13,8 +13,7 @@ from .stage45_engine import add_prediction_uncertainty,add_market_risk
 from .final_intelligence import apply_final_intelligence,update_learning_state,final_stage_manifest
 from .jump_engine import generate_jump_watchlist
 from .intraday_engine import generate_intraday_watchlist
-from .ipo_runner import fetch_live_ipos
-from .ipo_engine import analyze_ipos
+from .ipo_runner import get_ipo_report
 from .ledger import prediction_exists,load_predictions,save_predictions,save_jump_predictions,save_intraday_predictions,load_jump_predictions,load_intraday_predictions,morning_report_sent,mark_morning_report_sent
 from .retraining import load_model_state
 from .telegram_report import send_telegram,morning_report
@@ -22,13 +21,11 @@ from .portfolio_report import portfolio_snapshot
 from .report_metrics import model_report_metrics
 from .utils import today_ist,is_weekday
 
-
 def _bucket_candidates(candidates,max_per_bucket=2):
     if candidates is None or candidates.empty:return candidates.iloc[0:0] if candidates is not None else pd.DataFrame()
     pieces=[]
     for _,group in candidates.groupby("PriceBucket",sort=False):pieces.append(group.sort_values(["Score","Confidence","Direction_Confidence"],ascending=False).head(max_per_bucket))
     return pd.concat(pieces,ignore_index=True) if pieces else candidates.iloc[0:0]
-
 
 def _attach_horizons(candidates,data_map,cutoff_date):
     rows=[]
@@ -44,7 +41,6 @@ def _attach_horizons(candidates,data_map,cutoff_date):
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
 
-
 def _attach_current_ohlcv(selected,data_map,cutoff_date):
     out=selected.copy()
     for c in ["Current_Open","Current_High","Current_Low","Current_Close","Current_Volume"]:out[c]=0.0
@@ -55,7 +51,6 @@ def _attach_current_ohlcv(selected,data_map,cutoff_date):
         if valid.empty:continue
         x=valid.iloc[-1];out.loc[idx,"Current_Open"]=float(x["Open"]);out.loc[idx,"Current_High"]=float(x["High"]);out.loc[idx,"Current_Low"]=float(x["Low"]);out.loc[idx,"Current_Close"]=float(x["Close"]);out.loc[idx,"Current_Volume"]=float(x["Volume"])
     return out
-
 
 def _portfolio_payload():
     try:
@@ -70,23 +65,20 @@ def _portfolio_payload():
         print(f"Portfolio report unavailable: {exc}")
         return {"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{},"Rows":["Portfolio data unavailable"],"Available":False}
 
-
 def _prediction_metadata(prediction_date):
     path=Path(f"data/stage2/predictions/predictions_{prediction_date}.json")
     try:return json.loads(path.read_text()) if path.exists() else {}
     except Exception:return {}
 
-
 def _send_existing_report(prediction_date):
     predictions=load_predictions(prediction_date)
     if predictions.empty:return False
-    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date)
+    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date);ipo=get_ipo_report()
     scan={"Universe":meta.get("StocksScanned",meta.get("Universe",0)),"Data":meta.get("DataStocks",meta.get("StocksWithData",0)),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",meta.get("AICandidates",0)),"Selected":len(predictions)}
-    report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}))
+    report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}),ipo=ipo)
     sent=send_telegram(report)
     if sent:mark_morning_report_sent(prediction_date)
     return sent
-
 
 def run():
     prediction_date=today_ist()
@@ -120,7 +112,7 @@ def run():
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
     intraday=generate_intraday_watchlist(list(data_map.keys()),cutoff_date=cutoff_date)
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
-    try:ipo=analyze_ipos(fetch_live_ipos());ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
+    try:ipo=get_ipo_report();ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
     accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)};report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());sent=send_telegram(report)
     if sent:mark_morning_report_sent(prediction_date)
