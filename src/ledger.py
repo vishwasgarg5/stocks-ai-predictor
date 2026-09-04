@@ -32,6 +32,20 @@ def load_predictions(prediction_date):
     if not path.exists(): return pd.DataFrame()
     return pd.read_csv(path)
 
+def save_jump_predictions(df,prediction_date):
+    path=jump_path(prediction_date);df.to_csv(path,index=False);return path
+
+def save_intraday_predictions(df,prediction_date):
+    path=intraday_path(prediction_date);df.to_csv(path,index=False);return path
+
+def load_jump_predictions(prediction_date):
+    path=jump_path(prediction_date)
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+def load_intraday_predictions(prediction_date):
+    path=intraday_path(prediction_date)
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
 def latest_prediction_date(on_or_before=None):
     files=sorted(PREDICTIONS_DIR.glob("predictions_*.csv"));dates=[]
     for path in files:
