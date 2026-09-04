@@ -1,8 +1,8 @@
-"""Mobile-first Telegram reports for the final NSE AI pipeline."""
+"""Mobile-first Telegram reports for Stage 10.1 NSE AI pipeline."""
 import os
 import requests
 import pandas as pd
-from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION
+from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION, PRICE_BUCKET_NAMES
 from .utils import format_money, format_percent, split_messages
 
 
@@ -84,29 +84,55 @@ def _decision(r, expected, rr, model_warning=False):
     return "HOLD" if action in {"BUY", "HOLD"} else "WATCH"
 
 
-def _stock_rows(selected, model_warning=False):
-    rows = []
-    for i, (_, r) in enumerate(selected.head(5).iterrows(), 1):
-        cmp = float(r.get("Current_Price", r.get("Current_Close", 0)) or 0)
-        pred = float(r.get("Pred_Close", 0) or 0)
-        expected = ((pred / cmp) - 1) * 100 if cmp else 0
-        sl = r.get("StopLoss", r.get("SL"))
-        sl_text = format_money(sl) if sl is not None and not pd.isna(sl) else "-"
-        rr = "-"
-        try:
-            sl_value = float(sl)
-            reward = pred - cmp
-            risk = cmp - sl_value
-            if reward > 0 and risk > 0:
-                rr = f"{reward / risk:.1f}x"
-        except (TypeError, ValueError):
-            pass
-        rows.append([i, r.get("Symbol", "-"), r.get("PriceBucket", "-"), format_money(cmp), format_money(r.get("Current_Open", 0)), format_money(r.get("Current_High", 0)), format_money(r.get("Current_Low", 0)), format_money(r.get("Current_Close", cmp)), f"{float(r.get('Current_Volume', 0) or 0):,.0f}", f"{pred:.2f}", f"{expected:+.1f}%", sl_text, rr, f"{float(r.get('Confidence', 0) or 0):.0f}%", _decision(r, expected, rr, model_warning)])
-    return rows
+def _stock_row(r, model_warning=False):
+    cmp = float(r.get("Current_Price", r.get("Current_Close", 0)) or 0)
+    pred = float(r.get("Pred_Close", 0) or 0)
+    expected = ((pred / cmp) - 1) * 100 if cmp else 0
+    sl = r.get("StopLoss", r.get("SL"))
+    sl_text = format_money(sl) if sl is not None and not pd.isna(sl) else "-"
+    rr = "-"
+    try:
+        sl_value = float(sl); reward = pred - cmp; risk = cmp - sl_value
+        if reward > 0 and risk > 0: rr = f"{reward / risk:.1f}x"
+    except (TypeError, ValueError):
+        pass
+    return [
+        r.get("Symbol", "-"),
+        format_money(cmp),
+        format_money(r.get("Current_Open", 0)),
+        format_money(r.get("Current_High", 0)),
+        format_money(r.get("Current_Low", 0)),
+        format_money(r.get("Current_Close", cmp)),
+        f"{float(r.get('Current_Volume', 0) or 0):,.0f}",
+        f"₹{pred:,.2f}",
+        f"{expected:+.1f}%",
+        sl_text,
+        rr,
+        f"{float(r.get('Confidence', 0) or 0):.0f}%",
+        _decision(r, expected, rr, model_warning),
+    ]
+
+
+def _bucket_sections(selected, model_warning=False):
+    """Render one separate table for the best qualified stock in each configured price bucket."""
+    if selected is None or selected.empty:
+        return ["No stock passed the quality gate today."]
+    lines = []
+    present = set(selected["PriceBucket"].astype(str)) if "PriceBucket" in selected.columns else set()
+    ordered = list(PRICE_BUCKET_NAMES) + [b for b in selected["PriceBucket"].astype(str).unique() if b not in PRICE_BUCKET_NAMES]
+    for bucket in ordered:
+        group = selected[selected["PriceBucket"].astype(str) == bucket].copy() if "PriceBucket" in selected.columns else pd.DataFrame()
+        if group.empty:
+            continue
+        row = group.sort_values([c for c in ["TradeConfidence", "Score", "Confidence"] if c in group.columns], ascending=False).iloc[0]
+        lines += [f"*{bucket} — BEST PICK*", "```", _table(["Stock","CMP","Open","High","Low","Close","Volume","AI Target","Exp%","SL","R/R","Conf","Decision"], [_stock_row(row, model_warning)]), "```"]
+    if not present:
+        lines.append("No price bucket was assigned.")
+    return lines
 
 
 def _scan_lines(scan):
-    return [f"🔎 Scan: {int(scan.get('Universe', 0)):,} → {int(scan.get('Data', 0)):,} data → {int(scan.get('Liquid', 0)):,} liquid → {int(scan.get('AI', 0)):,} AI → {int(scan.get('Selected', 0)):,} selected"]
+    return [f"🔎 Scan: {int(scan.get('Universe', 0)):,} → {int(scan.get('Data', 0)):,} data → {int(scan.get('Liquid', 0)):,} liquid → {int(scan.get('AI', 0)):,} AI → {int(scan.get('Selected', 0)):,} bucket picks"]
 
 
 def _portfolio_lines(p):
@@ -125,14 +151,10 @@ def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intra
     scan = kwargs.get("scan", {})
     portfolio = kwargs.get("portfolio", {})
     warning = str(accuracy.get("Health", "")).upper() in {"WARNING", "DEGRADED", "POOR"} or str(accuracy.get("Drift", "")).upper() in {"WARNING", "HIGH", "DEGRADED"}
-    lines = ["📈 *AI NSE MORNING REPORT*", f"_{prediction_date} | Data: {cutoff_date} | {MODEL_VERSION}_", *(_scan_lines(scan)), *(_accuracy_lines(accuracy, compact=True)), "", "🎯 *1. TOP STOCKS*"]
+    lines = ["📈 *AI NSE MORNING REPORT*", f"_{prediction_date} | Data: {cutoff_date} | {MODEL_VERSION}_", *(_scan_lines(scan)), *(_accuracy_lines(accuracy, compact=True)), "", "🎯 *1. TOP STOCKS — BUCKET WISE*"]
     if warning:
         lines.append("⚠️ *MODEL WARNING* — confidence reduced because model health/drift is weak.")
-    lines += _market_lines(snapshot, regime) + _sector_lines(selected) + ["", "*Price Bucket + Current OHLCV + AI Forecast*"]
-    if selected is not None and not selected.empty:
-        lines += ["```", _transpose_table(["#", "Stock", "Price Bucket", "CMP", "Open", "High", "Low", "Close", "Volume", "AI Target", "Exp%", "SL", "R/R", "Conf", "AI Decision"], _stock_rows(selected, warning)), "```"]
-    else:
-        lines.append("No stock passed the quality gate today.")
+    lines += _market_lines(snapshot, regime) + _sector_lines(selected) + [""] + _bucket_sections(selected, warning)
     if ipo is not None and not ipo.empty:
         lines.append("*IPO / NEW LISTINGS*")
         for _, r in ipo.head(5).iterrows():
@@ -140,13 +162,11 @@ def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intra
         lines.append("GMP is unofficial; not a guaranteed listing price.")
     else:
         lines.append("*IPO / NEW LISTINGS:* No verified live records available.")
-    lines += _portfolio_lines(portfolio) + ["", "🔥 *2. +5% JUMP WATCH*"]
+    lines += _portfolio_lines(portfolio) + ["", "🔥 *2. +5% JUMP WATCH"]
     if jump_watchlist is not None and not jump_watchlist.empty:
         rows = []
         for i, (_, r) in enumerate(jump_watchlist.head(5).iterrows(), 1):
-            cp = float(r["Current_Price"])
-            target = float(r["Target_Level"])
-            prob = float(r.get("Jump_Probability", 0) or 0)
+            cp = float(r["Current_Price"]); target = float(r["Target_Level"]); prob = float(r.get("Jump_Probability", 0) or 0)
             rows.append([i, r["Symbol"], format_money(cp), format_money(target), format_percent((target / cp - 1) * 100 if cp else 0), format_percent(float(r.get("Estimated_7D_Upside", 0))), f"{prob:.0f}%"])
         lines += ["```", _transpose_table(["#", "Stock", "CMP", "+5% Target", "Target%", "7D Exp%", "Prob"], rows), "```"]
     else:
@@ -168,10 +188,10 @@ def evening_report(market_date, evaluation, metrics, retraining, **kwargs):
     accuracy = kwargs.get("accuracy", {})
     scan = kwargs.get("scan", {})
     portfolio = kwargs.get("portfolio", {})
-    lines = ["🌙 *AI NSE EVENING REPORT*", f"_{market_date} | {MODEL_VERSION}_"] + _scan_lines(scan) + _accuracy_lines(accuracy) + ["", "🎯 *1. TOP 5 — PREDICTION vs ACTUAL*"]
+    lines = ["🌙 *AI NSE EVENING REPORT*", f"_{market_date} | {MODEL_VERSION}_"] + _scan_lines(scan) + _accuracy_lines(accuracy) + ["", "🎯 *1. PREDICTION vs ACTUAL — BUCKET PICKS*"]
     if evaluation is not None and not evaluation.empty:
         rows, dr = [], []
-        for _, r in evaluation.head(5).iterrows():
+        for _, r in evaluation.iterrows():
             rows += [[r["Symbol"], "PRED", f"{r['Pred_Open']:.2f}", f"{r['Pred_High']:.2f}", f"{r['Pred_Low']:.2f}", f"{r['Pred_Close']:.2f}"], ["", "ACT", f"{r['Actual_Open']:.2f}", f"{r['Actual_High']:.2f}", f"{r['Actual_Low']:.2f}", f"{r['Actual_Close']:.2f}"], ["", "DIFF", f"{r['Diff_Open']:+.2f}", f"{r['Diff_High']:+.2f}", f"{r['Diff_Low']:+.2f}", f"{r['Diff_Close']:+.2f}"]]
             dr.append([r["Symbol"], f"{r['Pred_Direction']} → {r['Actual_Direction']}", "YES" if r["DirectionCorrect"] else "NO"])
         lines += ["```", _table(["Stock", "Type", "Open", "High", "Low", "Close"], rows), "```", "", "*Direction*", "```", _table(["Stock", "Pred → Actual", "Correct"], dr), "```"]
@@ -183,6 +203,6 @@ def evening_report(market_date, evaluation, metrics, retraining, **kwargs):
         lines.append("Intraday: " + " | ".join(f"{k} {v}" for k, v in intraday.items()))
     if ipo is not None and not ipo.empty:
         lines.append(f"IPO/new listings evaluated: {len(ipo)}")
-    lines += _portfolio_lines(portfolio) + ["", "🧠 *3. MODEL LEARNING*"]
+    lines += _portfolio_lines(portfolio) + ["", "🧠 *3. MODEL LEARNING"]
     lines += ["```", _table(["Metric", "Value"], [["Samples", metrics.get("Samples", 0)], ["Overall MAPE", f"{metrics.get('OverallMAPE', 0):.3f}%"], ["Close MAPE", f"{metrics.get('CloseMAPE', 0):.3f}%"], ["Direction Accuracy", f"{metrics.get('DirectionAccuracy', 0):.1f}%"], ["Previous Accuracy", _fmt_accuracy(accuracy.get("PreviousAccuracy"))], ["Current Accuracy", _fmt_accuracy(accuracy.get("CurrentAccuracy"))], ["Champion/Challenger", retraining.get("Decision", "-")], ["Model Replaced", "YES" if retraining.get("Retrained") else "NO"], ["Improvement", f"{retraining.get('Improvement', 0):+.2f}%"], ["Learning State", learning.get("status", "UPDATED")]]), "```"]
     return "\n".join(lines)
