@@ -59,13 +59,16 @@ def _attach_current_ohlcv(selected,data_map,cutoff_date):
 
 def _portfolio_payload():
     try:
-        df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[]
+        df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[];s["Available"]=not df.empty
         if not df.empty:
             for _,r in df.sort_values("PnL").head(8).iterrows():
                 price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=str(r.get("Recommended_Qty",0));newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";pa=str(r.get("Averaging_Action","-"))
                 s["Rows"].append(f"{r.Stock}: CMP {price} | Avg {avg} | AI {target} | {ret} | {pa} {rec if pa=='AVERAGE' else ''} | NewAvg {newavg}")
+        else:s["Rows"].append("Portfolio data unavailable")
         return s
-    except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {}
+    except Exception as exc:
+        print(f"Portfolio report unavailable: {exc}")
+        return {"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{},"Rows":["Portfolio data unavailable"],"Available":False}
 
 
 def _prediction_metadata(prediction_date):
@@ -75,7 +78,6 @@ def _prediction_metadata(prediction_date):
 
 
 def _send_existing_report(prediction_date):
-    """Send a report from an already-created current-version ledger without retraining."""
     predictions=load_predictions(prediction_date)
     if predictions.empty:return False
     meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date)
