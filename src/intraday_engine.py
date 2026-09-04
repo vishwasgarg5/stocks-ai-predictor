@@ -5,9 +5,15 @@ from .config import INTRADAY_PERIOD, INTRADAY_INTERVAL, INTRADAY_TOP_N, INTRADAY
 from .utils import clean_ohlcv
 
 
-def download_intraday(symbol):
+def download_intraday(symbol, cutoff_date=None):
     try:
-        return clean_ohlcv(yf.download(f"{symbol}.NS", period=INTRADAY_PERIOD, interval=INTRADAY_INTERVAL, auto_adjust=False, progress=False, threads=False))
+        df=clean_ohlcv(yf.download(f"{symbol}.NS", period=INTRADAY_PERIOD, interval=INTRADAY_INTERVAL, auto_adjust=False, progress=False, threads=False))
+        if cutoff_date is not None and not df.empty:
+            cutoff=pd.Timestamp(cutoff_date)
+            if getattr(df.index,"tz",None) is not None:
+                cutoff=cutoff.tz_localize(df.index.tz) if cutoff.tzinfo is None else cutoff.tz_convert(df.index.tz)
+            df=df[df.index<=cutoff]
+        return df
     except Exception as exc:
         print(f"{symbol}: intraday data failed: {exc}")
         return pd.DataFrame()
@@ -44,11 +50,11 @@ def calculate_intraday_setup(df):
     return {"Current":current,"Bias":bias,"Target":target,"StopLoss":stop_loss,"ExpectedMove":expected_move*100,"Score":score,"Confidence":confidence,"RelativeVolume":relative_volume,"VWAP":vwap,"EMA9":ema9,"EMA20":ema20},"QUALIFIED"
 
 
-def generate_intraday_watchlist(symbols,max_workers=6):
+def generate_intraday_watchlist(symbols, cutoff_date=None, max_workers=6):
     from concurrent.futures import ThreadPoolExecutor,as_completed
     data={}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures={executor.submit(download_intraday,symbol):symbol for symbol in symbols}
+        futures={executor.submit(download_intraday,symbol,cutoff_date):symbol for symbol in symbols}
         for future in as_completed(futures):
             symbol=futures[future]
             try:
