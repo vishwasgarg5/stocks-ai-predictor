@@ -140,6 +140,66 @@
           "FinalRisk": "MEDIUM"
         }
       ]
+    },
+    {
+      "date": "2026-09-04",
+      "prediction_date": "2026-09-04",
+      "metrics": {
+        "Samples": 24,
+        "OpenMAPE": 1.7011115871697227,
+        "HighMAPE": 2.0101481485975348,
+        "LowMAPE": 2.2490096987267516,
+        "CloseMAPE": 2.0997296730319084,
+        "VolumeMAPE": 57.33340194100966,
+        "OverallMAPE": 2.0149997768814796,
+        "DirectionAccuracy": 58.333333333333336
+      },
+      "accuracy": {
+        "PreviousAccuracy": 97.3823536853531,
+        "CurrentAccuracy": 97.9002703269681,
+        "AccuracySamples": 24,
+        "DirectionAccuracy": 58.333333333333336,
+        "Health": "HEALTHY",
+        "Drift": "LOW",
+        "Trend7D": 97.67830605199025,
+        "Trend30D": 97.67830605199025
+      },
+      "retraining": {
+        "Retrained": false,
+        "Decision": "CHAMPION KEPT",
+        "Champion": "A",
+        "Challenger": "B",
+        "NewChampion": "A",
+        "ChampionError": 0.030583845960742102,
+        "ChallengerError": 0.030267590383298033,
+        "Improvement": 1.0340608498029324,
+        "StocksProcessed": 14
+      },
+      "bucket_metrics": {
+        "B1": 98.84603441474026,
+        "B2": 97.34080658384698,
+        "B3": 99.57933155769732,
+        "B4": 99.73101414475417,
+        "B5": 97.93131032422569
+      },
+      "horizon_metrics": {},
+      "horizon_samples": 0,
+      "symbols_evaluated": [
+        "ALLCARGO",
+        "BAJAJHIND",
+        "HCC",
+        "FCL",
+        "GEOJITFSL",
+        "FOSECOIND",
+        "ATLANTAELE",
+        "AXISCADES",
+        "COFORGE",
+        "ELGIEQUIP",
+        "COHANCE",
+        "63MOONS",
+        "EBGNG",
+        "EXPLEOSOL"
+      ]
     }
   ],
   "last_update": "2026-09-04"

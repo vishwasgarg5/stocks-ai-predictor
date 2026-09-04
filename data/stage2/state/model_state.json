@@ -1,15 +1,24 @@
 {
   "active_variant": "A",
-  "last_champion_error": 0.11238493431516065,
-  "last_challenger_error": 0.11167623108876809,
-  "last_improvement": 0.6306034084650071,
+  "last_champion_error": 0.030583845960742102,
+  "last_challenger_error": 0.030267590383298033,
+  "last_improvement": 1.0340608498029324,
   "last_decision": "CHAMPION KEPT",
   "processed_stocks": [
-    "DIVISLAB",
-    "BIRLACABLE",
+    "ALLCARGO",
+    "BAJAJHIND",
+    "HCC",
+    "FCL",
+    "GEOJITFSL",
+    "FOSECOIND",
+    "ATLANTAELE",
+    "AXISCADES",
+    "COFORGE",
+    "ELGIEQUIP",
+    "COHANCE",
+    "63MOONS",
     "EBGNG",
-    "DWARKESH",
-    "HFCL"
+    "EXPLEOSOL"
   ],
-  "cutoff_date": "2026-09-02"
+  "cutoff_date": "2026-09-03"
 }
