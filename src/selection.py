@@ -1,4 +1,4 @@
-"""Stage 4.5 final stock selection: price bucket + sector + horizon + uncertainty + risk."""
+"""Stage 10.1 precision selection: one best qualified stock per price bucket."""
 import pandas as pd
 from .config import STOCK_RELIABILITY_FILE,MAX_PREDICTION_UNCERTAINTY,TOP_N
 from .utils import clamp
@@ -72,13 +72,18 @@ def score_candidates(candidates,regime="SIDEWAYS"):
     return df.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence","SectorScore"],ascending=False).reset_index(drop=True)
 
 
-def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=2):
+def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=2,bucket_only=False):
+    """Select qualified stocks. Stage 10.1 can return the best pick from every bucket without a global TOP_N cap."""
     scored=score_candidates(candidates,regime)
     if scored.empty: return scored
     qualified=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=35.0)].copy()
     if "PredictionUncertaintyPct" in qualified.columns: qualified=qualified[qualified["PredictionUncertaintyPct"]<=MAX_PREDICTION_UNCERTAINTY]
     if qualified.empty: return qualified.reset_index(drop=True)
     pieces=[]
-    for _,group in qualified.groupby("PriceBucket",sort=False): pieces.append(group.sort_values(["TradeConfidence","Score"],ascending=False).head(max_per_bucket))
+    for bucket,group in qualified.groupby("PriceBucket",sort=False):
+        limit=1 if bucket_only else max_per_bucket
+        pieces.append(group.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False).head(limit))
     selected=pd.concat(pieces,ignore_index=True) if pieces else qualified.iloc[0:0]
+    if bucket_only:
+        return selected.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     return selected.sort_values(["TradeConfidence","Score"],ascending=False).head(top_n).reset_index(drop=True)
