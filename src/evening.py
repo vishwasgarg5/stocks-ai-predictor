@@ -56,7 +56,14 @@ def _bucket_metrics(evaluation,predictions):
     if evaluation is None or evaluation.empty or predictions is None or predictions.empty:return {}
     p=_ensure_price_bucket(predictions)
     if "Symbol" not in p.columns or "PriceBucket" not in p.columns or "Symbol" not in evaluation.columns:return {}
-    x=evaluation.merge(p[["Symbol","PriceBucket"]].drop_duplicates("Symbol"),on="Symbol",how="left")
+    x=evaluation.copy()
+    if "PriceBucket" not in x.columns:
+        x=x.merge(p[["Symbol","PriceBucket"]].drop_duplicates("Symbol"),on="Symbol",how="left")
+    else:
+        missing=x["PriceBucket"].isna() | x["PriceBucket"].astype(str).str.strip().isin(["","nan","None","-"])
+        if missing.any():
+            bucket_map=p[["Symbol","PriceBucket"]].drop_duplicates("Symbol").set_index("Symbol")["PriceBucket"]
+            x.loc[missing,"PriceBucket"]=x.loc[missing,"Symbol"].map(bucket_map)
     if "APE_Close" not in x.columns:return {}
     result={}
     for bucket,g in x.dropna(subset=["PriceBucket"]).groupby("PriceBucket"):
