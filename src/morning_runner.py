@@ -70,8 +70,7 @@ def _portfolio_payload():
 
 def _prediction_metadata(prediction_date):
     path=Path(f"data/stage2/predictions/predictions_{prediction_date}.json")
-    try:
-        return json.loads(path.read_text()) if path.exists() else {}
+    try:return json.loads(path.read_text()) if path.exists() else {}
     except Exception:return {}
 
 
@@ -79,17 +78,8 @@ def _send_existing_report(prediction_date):
     """Send a report from an already-created current-version ledger without retraining."""
     predictions=load_predictions(prediction_date)
     if predictions.empty:return False
-    meta=_prediction_metadata(prediction_date)
-    cutoff=meta.get("DataCutoff",prediction_date)
-    jump_watchlist=load_jump_predictions(prediction_date)
-    intraday=load_intraday_predictions(prediction_date)
-    scan={
-        "Universe":meta.get("StocksScanned",meta.get("Universe",0)),
-        "Data":meta.get("DataStocks",meta.get("StocksWithData",0)),
-        "Liquid":meta.get("LiquidStocks",0),
-        "AI":meta.get("AI",meta.get("AICandidates",0)),
-        "Selected":len(predictions),
-    }
+    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date)
+    scan={"Universe":meta.get("StocksScanned",meta.get("Universe",0)),"Data":meta.get("DataStocks",meta.get("StocksWithData",0)),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",meta.get("AICandidates",0)),"Selected":len(predictions)}
     report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}))
     sent=send_telegram(report)
     if sent:mark_morning_report_sent(prediction_date)
@@ -99,19 +89,12 @@ def _send_existing_report(prediction_date):
 def run():
     prediction_date=today_ist()
     if not is_weekday():print("Weekend. Morning prediction skipped.");return
-
-    # A previous-stage prediction must never block the current Stage 10.1 run.
-    # This fixes the case where an older Stage 10 file exists for today's date.
-    existing_meta=_prediction_metadata(prediction_date)
-    current_prediction=prediction_exists(prediction_date)
-    existing_current_version=(existing_meta.get("Stage")=="Stage 10.1" and existing_meta.get("ModelVersion")==MODEL_VERSION)
+    existing_meta=_prediction_metadata(prediction_date);current_prediction=prediction_exists(prediction_date);existing_current_version=(existing_meta.get("Stage")=="Stage 10.1" and existing_meta.get("ModelVersion")==MODEL_VERSION)
     if current_prediction and existing_current_version:
         if morning_report_sent(prediction_date):print(f"Morning prediction and report already completed for {prediction_date}.")
         else:print(f"Current Stage 10.1 prediction exists for {prediction_date}; sending the pending morning report.");_send_existing_report(prediction_date)
         return
-    if current_prediction and not existing_current_version:
-        print(f"Stale prediction detected for {prediction_date} ({existing_meta.get('Stage','unknown')} / {existing_meta.get('ModelVersion','unknown')}); regenerating with {MODEL_VERSION}.")
-
+    if current_prediction and not existing_current_version:print(f"Stale prediction detected for {prediction_date} ({existing_meta.get('Stage','unknown')} / {existing_meta.get('ModelVersion','unknown')}); regenerating with {MODEL_VERSION}.")
     universe=load_universe();scan_count=len(universe);raw_data=download_many(universe,HISTORY_PERIOD,workers=8);data_map=filter_liquid_universe(raw_data)
     if len(data_map)<20:raise RuntimeError("Too few liquid stocks.")
     nifty_fallback=get_completed_session_date("morning",prediction_date);cutoff_date=get_data_cutoff_date(data_map,prediction_date,fallback=nifty_fallback)
@@ -128,8 +111,8 @@ def run():
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
     candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime)
-    selected=select_top_stocks(bucket_pool,None,regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=FINAL_BEST_PER_BUCKET,bucket_only=True);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
-    metadata={"Stage":"Stage 10.1","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
+    selected=select_top_stocks(bucket_pool,top_n=25,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=FINAL_BEST_PER_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
+    metadata={"Stage":"Stage 10.1","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"MaxSelectedStocks":25,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
     save_predictions(selected,prediction_date,metadata);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","FinalDecisionScore","Action","FinalRisk"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
