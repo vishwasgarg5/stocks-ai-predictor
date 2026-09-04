@@ -28,10 +28,40 @@ def calculate_cumulative_metrics(exclude_market_date=None):
 
 def _model_accuracy(metrics):return max(0.0,min(100.0,100.0-float(metrics.get("CloseMAPE",100.0))))
 
+def _price_bucket(value):
+    try:p=float(value)
+    except Exception:return "-"
+    if not np.isfinite(p):return "-"
+    if p>=1000:return ">1000"
+    if p>=500:return "500-999"
+    if p>=100:return "100-499"
+    if p>=50:return "50-99"
+    if p>=10:return "10-49"
+    return "<10"
+
+def _ensure_price_bucket(predictions):
+    """Keep evening evaluation resilient to older ledgers without PriceBucket."""
+    x=predictions.copy()
+    if "PriceBucket" not in x.columns:
+        x["PriceBucket"]=np.nan
+    missing=x["PriceBucket"].isna() | x["PriceBucket"].astype(str).str.strip().isin(["","nan","None","-"])
+    if missing.any():
+        source=None
+        for col in ["Current_Price","Pred_Close","Current_Close"]:
+            if col in x.columns:
+                source=col
+                break
+        if source is not None:
+            x.loc[missing,"PriceBucket"]=x.loc[missing,source].map(_price_bucket)
+    x["PriceBucket"]=x["PriceBucket"].fillna("-").astype(str)
+    return x
+
 def _bucket_metrics(evaluation,predictions):
-    if evaluation is None or evaluation.empty or predictions is None or predictions.empty or "PriceBucket" not in predictions:return {}
-    cols=[c for c in ["Symbol","PriceBucket"] if c in predictions.columns]
-    x=evaluation.merge(predictions[cols].drop_duplicates("Symbol"),on="Symbol",how="left")
+    if evaluation is None or evaluation.empty or predictions is None or predictions.empty:return {}
+    p=_ensure_price_bucket(predictions)
+    cols=[c for c in ["Symbol","PriceBucket"] if c in p.columns]
+    if "Symbol" not in cols or "PriceBucket" not in cols:return {}
+    x=evaluation.merge(p[cols].drop_duplicates("Symbol"),on="Symbol",how="left")
     result={}
     for bucket,g in x.dropna(subset=["PriceBucket"]).groupby("PriceBucket"):
         result[str(bucket)]=float((1-g["APE_Close"].abs()/100).clip(0,1).mean()*100)
@@ -42,7 +72,7 @@ def _horizon_evaluations(market_date,data_map):
     market=pd.Timestamp(market_date).date();rows=[]
     for path in sorted(PREDICTIONS_DIR.glob("predictions_*.csv")):
         try:
-            prediction_date=pd.Timestamp(path.stem.replace("predictions_","")).date();pred=pd.read_csv(path)
+            prediction_date=pd.Timestamp(path.stem.replace("predictions_","")).date();pred=_ensure_price_bucket(pd.read_csv(path))
         except Exception:continue
         if pred.empty or "Symbol" not in pred.columns:continue
         for horizon in MULTI_HORIZONS:
@@ -90,6 +120,7 @@ def run():
     if prediction_date is None:print("No morning prediction ledger found.");return
     predictions=load_predictions(prediction_date)
     if predictions.empty:print("Morning prediction file is empty.");return
+    predictions=_ensure_price_bucket(predictions)
     if evaluation_exists(market_date):print(f"Evaluation already exists for {market_date}. Skipping.");return
     symbols=predictions["Symbol"].astype(str).tolist();data_map=download_many(symbols,HISTORY_PERIOD,workers=5);rows=[]
     for _,p in predictions.iterrows():
