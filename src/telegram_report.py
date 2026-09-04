@@ -96,8 +96,14 @@ def _scan(scan):
 
 
 def _market(snapshot, regime):
-    snapshot=snapshot or {}; n,b,v=snapshot.get("NIFTY",{}),snapshot.get("BANKNIFTY",{}),snapshot.get("VIX",{}); br=snapshot.get("Breadth",{})
-    return ["Index | NIFTY | BANKNIFTY | VIX | Breadth", f"Value | {_fmt(n.get('Close'))} | {_fmt(b.get('Close'))} | {_fmt(v.get('Close'))} | {int(br.get('Advancers',0))}↑ / {int(br.get('Decliners',0))}↓", f"1D%   | {_pct(n.get('Change1D'))} | {_pct(b.get('Change1D'))} | - | {regime}"]
+    snapshot=snapshot or {}
+    n=snapshot.get("NIFTY",{}); b=snapshot.get("BANKNIFTY",{}); f=snapshot.get("FINNIFTY",{}); m=snapshot.get("MIDCPNIFTY",{}); v=snapshot.get("VIX",{}); br=snapshot.get("Breadth",{})
+    return [
+        "Index | NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY | VIX",
+        f"Value | {_fmt(n.get('Close'))} | {_fmt(b.get('Close'))} | {_fmt(f.get('Close'))} | {_fmt(m.get('Close'))} | {_fmt(v.get('Close'))}",
+        f"1D%   | {_pct(n.get('Change1D'))} | {_pct(b.get('Change1D'))} | {_pct(f.get('Change1D'))} | {_pct(m.get('Change1D'))} | -",
+        f"Breadth | {int(br.get('Advancers',0))}↑ / {int(br.get('Decliners',0))}↓ | Regime {regime}",
+    ]
 
 
 def _portfolio(p):
