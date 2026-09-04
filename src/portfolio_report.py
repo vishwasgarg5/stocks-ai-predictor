@@ -57,13 +57,13 @@ def _attach_predictions(df):
     return df.merge(p,on="Ticker",how="left"),pred_date
 
 def _average_plan(row):
-    qty=float(row.Quantity or 0);price=row.Current_Price;avg=row.Average_Price;target=row.AI_Target
-    if pd.isna(avg) and price is not None and pd.notna(row.Reported_Return) and float(row.Reported_Return)>-100:
-        avg=price/(1+float(row.Reported_Return)/100);row.Average_Price=avg;row.AveragePriceSource="ESTIMATED_FROM_RETURN"
-    elif pd.isna(avg) and price is not None and qty>0 and pd.notna(row.Reported_PnL):
-        avg=price-float(row.Reported_PnL)/qty;row.Average_Price=avg;row.AveragePriceSource="ESTIMATED_FROM_PNL"
-    elif pd.notna(avg):row.AveragePriceSource="CSV"
-    else:row.AveragePriceSource="UNAVAILABLE"
+    qty=float(row["Quantity"] or 0);price=row["Current_Price"];avg=row["Average_Price"];target=row["AI_Target"]
+    if pd.isna(avg) and price is not None and pd.notna(row["Reported_Return"]) and float(row["Reported_Return"])>-100:
+        avg=price/(1+float(row["Reported_Return"])/100);row["Average_Price"]=avg;row["AveragePriceSource"]="ESTIMATED_FROM_RETURN"
+    elif pd.isna(avg) and price is not None and qty>0 and pd.notna(row["Reported_PnL"]):
+        avg=price-float(row["Reported_PnL"])/qty;row["Average_Price"]=avg;row["AveragePriceSource"]="ESTIMATED_FROM_PNL"
+    elif pd.notna(avg):row["AveragePriceSource"]="CSV"
+    else:row["AveragePriceSource"]="UNAVAILABLE"
     if price is None or pd.isna(avg) or qty<=0:
         row["Invested_Value"]=qty*avg if pd.notna(avg) else 0;row["Recovery_Gap_Pct"]=None;row["Target_Return_Pct"]=None;row["Recommended_Qty"]=0;row["New_Average_Price"]=None;row["Averaging_Action"]="DATA WAIT";return row
     row["Invested_Value"]=qty*float(avg);row["Recovery_Gap_Pct"]=(float(avg)-price)/float(avg)*100 if avg else None
@@ -80,13 +80,16 @@ def _average_plan(row):
 def portfolio_snapshot():
     df=load_portfolio()
     if df.empty:return df,{"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{}}
-    prices={t:_price(t) for t in df["Ticker"].dropna().unique()};df["Current_Price"]=df["Ticker"].map(prices);df,prediction_date=_attach_predictions(df);df=df.apply(_average_plan,axis=1);df["Current_Value"]=df["Quantity"]*df["Current_Price"].fillna(0);mask=df["Reported_PnL"].notna()&df["AveragePriceSource"].str.startswith("ESTIMATED");df["PnL"]=df["Current_Value"]-df["Invested_Value"];df.loc[mask,"PnL"]=df.loc[mask,"Reported_PnL"]
-    df["Return_Pct"]=df.apply(lambda r:float(r.Reported_Return) if r.AveragePriceSource.startswith("ESTIMATED") and pd.notna(r.Reported_Return) else ((r.PnL/r.Invested_Value*100) if r.Invested_Value else None),axis=1)
+    prices={t:_price(t) for t in df["Ticker"].dropna().unique()};df["Current_Price"]=df["Ticker"].map(prices);df,prediction_date=_attach_predictions(df)
+    # Pre-create the column because pandas Series attribute assignment is not a reliable way to add a field.
+    df["AveragePriceSource"]="UNAVAILABLE"
+    df=df.apply(_average_plan,axis=1);df["Current_Value"]=df["Quantity"]*df["Current_Price"].fillna(0);mask=df["Reported_PnL"].notna()&df["AveragePriceSource"].str.startswith("ESTIMATED");df["PnL"]=df["Current_Value"]-df["Invested_Value"];df.loc[mask,"PnL"]=df.loc[mask,"Reported_PnL"]
+    df["Return_Pct"]=df.apply(lambda r:float(r["Reported_Return"]) if str(r["AveragePriceSource"]).startswith("ESTIMATED") and pd.notna(r["Reported_Return"]) else ((r["PnL"]/r["Invested_Value"]*100) if r["Invested_Value"] else None),axis=1)
     def action(r):
-        if pd.isna(r.Current_Price):return "DATA WAIT"
-        if r.Averaging_Action=="AVERAGE":return "AVERAGE"
-        if pd.notna(r.AI_Target) and r.AI_Target>r.Current_Price:return "RECOVERY / HOLD"
-        ret=r.Return_Pct
+        if pd.isna(r["Current_Price"]):return "DATA WAIT"
+        if r["Averaging_Action"]=="AVERAGE":return "AVERAGE"
+        if pd.notna(r["AI_Target"]) and r["AI_Target"]>r["Current_Price"]:return "RECOVERY / HOLD"
+        ret=r["Return_Pct"]
         if pd.notna(ret) and ret>=8:return "PARTIAL-PROFIT"
         if pd.notna(ret) and ret<=-35:return "RECOVERY-WATCH"
         if pd.notna(ret) and ret<=-15:return "HOLD / REVIEW"
