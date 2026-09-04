@@ -6,6 +6,10 @@ from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION, PRICE_BUCKET_NAMES
 from .utils import format_money, split_messages
 
 
+# Internal delimiter: each price bucket is delivered as its own Telegram message.
+_BUCKET_MESSAGE = "\n§§BUCKET_MESSAGE§§\n"
+
+
 def send_telegram(text):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -13,16 +17,21 @@ def send_telegram(text):
         print("Telegram secrets not configured.")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    # Stage 10.1 bucket sections are intentionally separated into individual messages.
+    parts = text.split(_BUCKET_MESSAGE) if _BUCKET_MESSAGE in text else [text]
     success = True
-    for message in split_messages(text, TELEGRAM_MAX_LENGTH):
-        try:
-            r = requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}, timeout=20)
-            if r.status_code != 200:
-                print("Telegram error:", r.text)
+    for part in parts:
+        if not part.strip():
+            continue
+        for message in split_messages(part.strip(), TELEGRAM_MAX_LENGTH):
+            try:
+                r = requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}, timeout=20)
+                if r.status_code != 200:
+                    print("Telegram error:", r.text)
+                    success = False
+            except Exception as exc:
+                print("Telegram exception:", exc)
                 success = False
-        except Exception as exc:
-            print("Telegram exception:", exc)
-            success = False
     return success
 
 
@@ -53,15 +62,15 @@ def _decision(r, expected, rr, warning=False):
 
 def _horizon_lines(r):
     cmp = float(r.get("Current_Price", r.get("Current_Close", 0)) or 0)
-    lines=[]
+    lines=["Horizon | Target | Exp%", "--------|--------|-----"]
     for h in (1,3,5,7,20):
         value=r.get(f"Horizon_{h}D")
         try:
             ret=float(value)
             target=cmp*(1+ret/100.0) if cmp else 0
-            lines.append(f"{h}D  ₹{_fmt(target)}  {_pct(ret)}")
+            lines.append(f"{h}D | ₹{_fmt(target)} | {_pct(ret)}")
         except (TypeError,ValueError):
-            lines.append(f"{h}D  -")
+            lines.append(f"{h}D | - | -")
     return lines
 
 
@@ -76,8 +85,8 @@ def _stock_card(r, warning=False):
     decision = _decision(r, expected, rr, warning)
     return [
         f"*{r.get('Symbol', '-')}*   |   *{decision}*",
-        f"CMP ₹{_fmt(cmp)}  →  *1D ₹{_fmt(pred)}*   {_pct(expected)}",
-        *[f"{x}" for x in _horizon_lines(r)],
+        f"CMP ₹{_fmt(cmp)}",
+        *_horizon_lines(r),
         f"O {_fmt(r.get('Current_Open'))}  H {_fmt(r.get('Current_High'))}  L {_fmt(r.get('Current_Low'))}  C {_fmt(r.get('Current_Close', cmp))}",
         f"Vol {_fmt(r.get('Current_Volume'), 0)}   •   SL {sl_text}   •   R/R {rr}",
         f"Confidence  *{float(r.get('Confidence', 0) or 0):.0f}%*",
@@ -87,14 +96,15 @@ def _stock_card(r, warning=False):
 def _bucket_sections(selected, warning=False):
     if selected is None or selected.empty: return ["No qualifying stock today."]
     lines=[]
-    for bucket in list(PRICE_BUCKET_NAMES) + [b for b in selected.get("PriceBucket", pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]:
+    buckets=list(PRICE_BUCKET_NAMES) + [b for b in selected.get("PriceBucket", pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
+    for bucket in buckets:
         group=selected[selected["PriceBucket"].astype(str)==bucket].copy() if "PriceBucket" in selected.columns else pd.DataFrame()
         if group.empty: continue
         sort_cols=[c for c in ["TradeConfidence","Score","Confidence"] if c in group.columns]
         if sort_cols: group=group.sort_values(sort_cols,ascending=False)
         label=str(group.iloc[0].get("PriceBucketLabel",bucket))
         if label in {"nan","None","-"}: label=bucket
-        lines += [f"\n💎 *{label}*"]
+        lines += [_BUCKET_MESSAGE, f"💎 *{label}*"]
         for _,row in group.head(5).iterrows(): lines += _stock_card(row,warning) + [""]
     return lines
 
@@ -117,17 +127,18 @@ def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intra
     accuracy=kwargs.get("accuracy",{}); scan=kwargs.get("scan",{}); portfolio=kwargs.get("portfolio",{}); snapshot=kwargs.get("market_snapshot",{}); regime=kwargs.get("regime","-"); ipo=kwargs.get("ipo")
     warning=str(accuracy.get("Health"," ")).upper() in {"WARNING","DEGRADED","POOR"} or str(accuracy.get("Drift"," ")).upper() in {"WARNING","HIGH","DEGRADED"}
     lines=["📈 *AI NSE MORNING REPORT*",f"📅 *Prediction: {prediction_date}*",f"⚙️ {MODEL_VERSION}",_scan(scan),f"🤖 Accuracy {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}  •  {int(accuracy.get('AccuracySamples',accuracy.get('Samples',0)) or 0)} validated","","🎯 *TOP STOCKS*  |  UP TO 5 PER PRICE BUCKET"]
-    lines += _market(snapshot,regime); lines += _bucket_sections(selected,warning)
+    lines += _market(snapshot,regime)
+    lines += _bucket_sections(selected,warning)
     if portfolio: lines += ["\n"+x for x in _portfolio(portfolio)]
-    lines.append("\n🔥 *JUMP WATCH*  |  TOP 5")
+
+    # Do not send empty sections; only show Jump Watch / Intraday when actual setups exist.
     if jump_watchlist is not None and not jump_watchlist.empty:
+        lines.append("\n🔥 *JUMP WATCH*  |  TOP 5")
         for i,(_,r) in enumerate(jump_watchlist.head(5).iterrows(),1):
             cp,target=float(r.get("Current_Price",0) or 0),float(r.get("Target_Level",0) or 0); lines.append(f"{i}. *{r.get('Symbol','-')}*  ₹{cp:,.2f} → ₹{target:,.2f}  {_pct((target/cp-1)*100 if cp else 0)}  •  Prob {float(r.get('Jump_Probability',0) or 0):.0f}%")
-    else: lines.append("No strong jump setup.")
-    lines.append("\n⚡ *INTRADAY*  |  TOP 5")
     if intraday is not None and not intraday.empty:
+        lines.append("\n⚡ *INTRADAY*  |  TOP 5")
         for i,(_,r) in enumerate(intraday.head(5).iterrows(),1): lines.append(f"{i}. *{r.get('Symbol','-')}*  {r.get('Bias','-')}  ₹{_fmt(r.get('Current'))} → ₹{_fmt(r.get('Target'))}  •  SL ₹{_fmt(r.get('StopLoss'))}  •  {float(r.get('Confidence',0) or 0):.0f}%")
-    else: lines.append("No confirmed intraday setup.")
     return "\n".join(lines)
 
 
