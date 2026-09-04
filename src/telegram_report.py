@@ -48,9 +48,10 @@ def _stock_card(r,warning=False):
         if reward>0 and risk>0:rr=f"{reward/risk:.1f}x"
     except (TypeError,ValueError):pass
     return [f"*{r.get('Symbol','-')}*   |   *{_decision(r,expected,rr,warning)}*",f"CMP ₹{_fmt(cmp)}",*_horizon_lines(r),*_ohlcv_lines(r,cmp),f"SL {sl_text}   •   R/R {rr}   •   Confidence *{float(r.get('Confidence',0) or 0):.0f}%*"]
-def _bucket_sections(selected,warning=False):
+def _bucket_sections(selected,warning=False,title="TOP STOCKS"):
     if selected is None or selected.empty:return ["No qualifying stock today."]
-    lines=[];buckets=list(PRICE_BUCKET_NAMES)+[b for b in selected.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
+    lines=[f"🎯 *{title}*  |  UP TO 5 PER PRICE BUCKET"]
+    buckets=list(PRICE_BUCKET_NAMES)+[b for b in selected.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
     for bucket in buckets:
         group=selected[selected["PriceBucket"].astype(str)==bucket].copy() if "PriceBucket" in selected.columns else pd.DataFrame()
         if group.empty:continue
@@ -69,12 +70,11 @@ def _portfolio(p):
 def _ipo(ipo):
     if ipo is None or (hasattr(ipo,"empty") and ipo.empty):return ["🏦 *IPO*  |  No active/upcoming IPOs found"]
     lines=["🏦 *IPO INTELLIGENCE*  |  ACTIVE / UPCOMING"]
-    for i,(_,r) in enumerate(ipo.head(8).iterrows(),1):
-        lines.append(f"{i}. *{r.get('IPOName','-')}* | ₹{_fmt(r.get('PriceHigh',0),0)} | GMP ₹{_fmt(r.get('GMPValue',0),0)} ({_pct(r.get('GMPPct',0))}) | Score {float(r.get('IPOScore',0) or 0):.0f} | *{r.get('IPOAction','WATCH')}*")
+    for i,(_,r) in enumerate(ipo.head(8).iterrows(),1):lines.append(f"{i}. *{r.get('IPOName','-')}* | ₹{_fmt(r.get('PriceHigh',0),0)} | GMP ₹{_fmt(r.get('GMPValue',0),0)} ({_pct(r.get('GMPPct',0))}) | Score {float(r.get('IPOScore',0) or 0):.0f} | *{r.get('IPOAction','WATCH')}*")
     return lines
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
     accuracy=kwargs.get("accuracy",{});scan=kwargs.get("scan",{});portfolio=kwargs.get("portfolio",{});snapshot=kwargs.get("market_snapshot",{});regime=kwargs.get("regime","-");ipo=kwargs.get("ipo",pd.DataFrame());warning=str(accuracy.get("Health"," ")).upper() in {"WARNING","DEGRADED","POOR"} or str(accuracy.get("Drift"," ")).upper() in {"WARNING","HIGH","DEGRADED"}
-    lines=["📈 *AI NSE MORNING REPORT*",f"📅 *Prediction: {prediction_date}*",f"⚙️ {MODEL_VERSION}",_scan(scan),f"🤖 Accuracy {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}  •  {int(accuracy.get('AccuracySamples',accuracy.get('Samples',0)) or 0)} validated","","🎯 *TOP STOCKS*  |  UP TO 5 PER PRICE BUCKET"]+_market(snapshot,regime)+_bucket_sections(selected,warning)
+    lines=["📈 *AI NSE MORNING REPORT*",f"📅 *Prediction: {prediction_date}*",f"⚙️ {MODEL_VERSION}",_scan(scan),f"🤖 Accuracy {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}  •  {int(accuracy.get('AccuracySamples',accuracy.get('Samples',0)) or 0)} validated","", "📊 *MARKET*",*_market(snapshot,regime)]+_bucket_sections(selected,warning)
     lines+=_ipo(ipo)
     if portfolio:lines += ["\n"+x for x in _portfolio(portfolio)]
     if jump_watchlist is not None and not jump_watchlist.empty:
@@ -85,12 +85,19 @@ def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,
         lines.append("\n⚡ *INTRADAY*  |  TOP 5")
         for i,(_,r) in enumerate(intraday.head(5).iterrows(),1):lines.append(f"{i}. *{r.get('Symbol','-')}*  {r.get('Bias','-')}  ₹{_fmt(r.get('Current'))} → ₹{_fmt(r.get('Target'))}  •  SL ₹{_fmt(r.get('StopLoss'))}  •  {float(r.get('Confidence',0) or 0):.0f}%")
     return "\n".join(lines)
+def _evening_bucket_sections(evaluation):
+    if evaluation is None or evaluation.empty:return ["No predictions available for evaluation."]
+    lines=[]
+    buckets=list(PRICE_BUCKET_NAMES)+[b for b in evaluation.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
+    for bucket in buckets:
+        group=evaluation[evaluation["PriceBucket"].astype(str)==bucket].copy() if "PriceBucket" in evaluation.columns else pd.DataFrame()
+        if group.empty:continue
+        lines += [_BUCKET_MESSAGE,f"💎 *{bucket}*"]
+        for _,r in group.sort_values("APE_Close",key=lambda s:s.abs()).head(5).iterrows():
+            ok="✅" if bool(r.get("DirectionCorrect",False)) else "❌";lines += [f"*{r.get('Symbol','-')}*  {ok}",f"PRED O {_fmt(r.get('Pred_Open'))} H {_fmt(r.get('Pred_High'))} L {_fmt(r.get('Pred_Low'))} C {_fmt(r.get('Pred_Close'))} V {_fmt(r.get('Pred_Volume'),0)}",f"ACT  O {_fmt(r.get('Actual_Open'))} H {_fmt(r.get('Actual_High'))} L {_fmt(r.get('Actual_Low'))} C {_fmt(r.get('Actual_Close'))} V {_fmt(r.get('Actual_Volume'),0)}",f"DIFF O {float(r.get('Diff_Open',0) or 0):+.2f} H {float(r.get('Diff_High',0) or 0):+.2f} L {float(r.get('Diff_Low',0) or 0):+.2f} C {float(r.get('Diff_Close',0) or 0):+.2f}",f"Direction {r.get('Pred_Direction','-')} → {r.get('Actual_Direction','-')}  •  Close APE {abs(float(r.get('APE_Close',0) or 0)):.2f}%","" ]
+    return lines
 def evening_report(market_date,evaluation,metrics,retraining,**kwargs):
-    accuracy=kwargs.get("accuracy",{});scan=kwargs.get("scan",{});bucket=kwargs.get("bucket_metrics",{});portfolio=kwargs.get("portfolio",{});learning=kwargs.get("learning",{});lines=["🌙 *AI NSE EVENING REPORT*",f"📅 *Market: {market_date}*",f"⚙️ {MODEL_VERSION}",_scan(scan),f"🤖 Accuracy {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}","","🎯 *PREDICTION vs ACTUAL*"]
-    if evaluation is not None and not evaluation.empty:
-        for _,r in evaluation.iterrows():
-            diff=float(r.get("Diff_Close",0) or 0);actual=float(r.get("Actual_Close",1) or 1);ok="✅" if bool(r.get("DirectionCorrect",False)) else "❌";lines += [f"\n*{r.get('Symbol','-')}*  {ok}",f"PRED  O {_fmt(r.get('Pred_Open'))}  H {_fmt(r.get('Pred_High'))}  L {_fmt(r.get('Pred_Low'))}  C {_fmt(r.get('Pred_Close'))}",f"ACT   O {_fmt(r.get('Actual_Open'))}  H {_fmt(r.get('Actual_High'))}  L {_fmt(r.get('Actual_Low'))}  C {_fmt(r.get('Actual_Close'))}",f"DIFF  O {float(r.get('Diff_Open',0) or 0):+.2f}  H {float(r.get('Diff_High',0) or 0):+.2f}  L {float(r.get('Diff_Low',0) or 0):+.2f}  C {diff:+.2f} ({diff/actual*100:+.2f}%)",f"Direction  {r.get('Pred_Direction','-')} → {r.get('Actual_Direction','-')}"]
-    else:lines.append("No predictions available for evaluation.")
-    lines += ["\n📊 *RESULTS*","Buckets  "+(" • ".join(f"{k} {v:.1f}%" for k,v in bucket.items()) if bucket else "No sufficient sample"),"\n🧠 *MODEL LEARNING*",f"Samples  {metrics.get('Samples',0)}",f"Overall MAPE  {metrics.get('OverallMAPE',0):.3f}%",f"Close MAPE  {metrics.get('CloseMAPE',0):.3f}%",f"Direction Accuracy  {metrics.get('DirectionAccuracy',0):.1f}%",f"Champion/Challenger  {retraining.get('Decision','-')}",f"Model Replaced  {'YES' if retraining.get('Retrained') else 'NO'}",f"Improvement  {retraining.get('Improvement',0):+.2f}%",f"Learning State  {learning.get('status','UPDATED')}"]
+    accuracy=kwargs.get("accuracy",{});scan=kwargs.get("scan",{});bucket=kwargs.get("bucket_metrics",{});portfolio=kwargs.get("portfolio",{});learning=kwargs.get("learning",{});horizon=kwargs.get("horizon_metrics",{});lines=["🌙 *AI NSE EVENING REPORT*",f"📅 *Market: {market_date}*",f"⚙️ {MODEL_VERSION}",_scan(scan),f"🤖 Accuracy {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}","","📊 *MARKET / BUCKET RESULTS*"]+_evening_bucket_sections(evaluation)
+    lines += ["\n📈 *BUCKET ACCURACY*",(" • ".join(f"{k} {_accuracy(v)}" for k,v in bucket.items()) if bucket else "No sufficient sample"),"\n🎯 *HORIZON ACCURACY*",(" • ".join(f"{k}D {v.get('Accuracy',0):.1f}%/{v.get('Samples',0)}" for k,v in sorted(horizon.items(),key=lambda x:int(x[0]))) if horizon else "No horizon target matured yet"),"\n🧠 *MODEL LEARNING*",f"Samples  {metrics.get('Samples',0)}",f"Overall MAPE  {metrics.get('OverallMAPE',0):.3f}%",f"Close MAPE  {metrics.get('CloseMAPE',0):.3f}%",f"Direction Accuracy  {metrics.get('DirectionAccuracy',0):.1f}%",f"Champion/Challenger  {retraining.get('Decision','-')}",f"Model Replaced  {'YES' if retraining.get('Retrained') else 'NO'}",f"Improvement  {retraining.get('Improvement',0):+.2f}%",f"Learning State  {learning.get('status','UPDATED')}"]
     if portfolio:lines += ["\n"+x for x in _portfolio(portfolio)]
     return "\n".join(lines)
