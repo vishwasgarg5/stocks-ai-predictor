@@ -1,4 +1,5 @@
-"""Stage 10.1 morning pipeline: precision screening + one best stock per price bucket + OHLCV forecast."""
+"""Stage 10.1 morning pipeline: prediction generation and reliable Telegram delivery."""
+import json
 import pandas as pd
 from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE
 from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime,get_market_snapshot
@@ -13,7 +14,7 @@ from .jump_engine import generate_jump_watchlist
 from .intraday_engine import generate_intraday_watchlist
 from .ipo_runner import fetch_live_ipos
 from .ipo_engine import analyze_ipos
-from .ledger import prediction_exists,save_predictions,save_jump_predictions,save_intraday_predictions
+from .ledger import prediction_exists,load_predictions,save_predictions,save_jump_predictions,save_intraday_predictions,morning_report_sent,mark_morning_report_sent
 from .retraining import load_model_state
 from .telegram_report import send_telegram,morning_report
 from .portfolio_report import portfolio_snapshot
@@ -61,10 +62,28 @@ def _portfolio_payload():
         return s
     except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {}
 
+def _send_existing_report(prediction_date):
+    """Send a report from an already-created ledger without retraining or overwriting it."""
+    predictions=load_predictions(prediction_date)
+    if predictions.empty: return False
+    meta={}
+    meta_path=__import__("pathlib").Path(f"data/stage2/predictions/predictions_{prediction_date}.json")
+    try:
+        if meta_path.exists(): meta=json.loads(meta_path.read_text())
+    except Exception: pass
+    cutoff=meta.get("DataCutoff", prediction_date)
+    report=morning_report(prediction_date,cutoff,predictions,pd.DataFrame(),pd.DataFrame(),accuracy=model_report_metrics(),scan={"Universe":meta.get("StocksScanned",0),"Data":meta.get("StocksScanned",0),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",0),"Selected":len(predictions)},portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot={})
+    sent=send_telegram(report)
+    if sent: mark_morning_report_sent(prediction_date)
+    return sent
+
 def run():
     prediction_date=today_ist()
     if not is_weekday():print("Weekend. Morning prediction skipped.");return
-    if prediction_exists(prediction_date):print(f"Prediction already exists for {prediction_date}. Skipping.");return
+    if prediction_exists(prediction_date):
+        if morning_report_sent(prediction_date): print(f"Morning prediction and report already completed for {prediction_date}.")
+        else: print(f"Prediction exists for {prediction_date}; sending the pending morning report.");_send_existing_report(prediction_date)
+        return
     universe=load_universe();scan_count=len(universe);raw_data=download_many(universe,HISTORY_PERIOD,workers=8);data_map=filter_liquid_universe(raw_data)
     if len(data_map)<20:raise RuntimeError("Too few liquid stocks.")
     nifty_fallback=get_completed_session_date("morning",prediction_date);cutoff_date=get_data_cutoff_date(data_map,prediction_date,fallback=nifty_fallback)
@@ -82,7 +101,7 @@ def run():
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
     candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime)
     selected=select_top_stocks(bucket_pool,None,regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=FINAL_BEST_PER_BUCKET,bucket_only=True);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
-    metadata={"Stage":"Stage 10.1","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"LiquidStocks":len(data_map)}
+    metadata={"Stage":"Stage 10.1","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
     save_predictions(selected,prediction_date,metadata);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","FinalDecisionScore","Action","FinalRisk"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
@@ -90,6 +109,8 @@ def run():
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=analyze_ipos(fetch_live_ipos());ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
-    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)};report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());send_telegram(report);print(report)
+    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)};report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());sent=send_telegram(report)
+    if sent:mark_morning_report_sent(prediction_date)
+    print(report)
 
 if __name__=="__main__":run()
