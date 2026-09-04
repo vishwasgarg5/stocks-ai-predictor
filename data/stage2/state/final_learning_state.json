@@ -36,6 +36,110 @@
           "FinalRisk": "MEDIUM"
         }
       ]
+    },
+    {
+      "date": "2026-09-04",
+      "regime": "SIDEWAYS",
+      "selected": [
+        {
+          "Symbol": "ALLCARGO",
+          "PriceBucket": "B5",
+          "FinalDecisionScore": 71.14411323434375,
+          "Action": "WATCH",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "BAJAJHIND",
+          "PriceBucket": "B5",
+          "FinalDecisionScore": 70.7864803099263,
+          "Action": "WATCH",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "HCC",
+          "PriceBucket": "B5",
+          "FinalDecisionScore": 70.46807569957525,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "FCL",
+          "PriceBucket": "B5",
+          "FinalDecisionScore": 70.22134185747419,
+          "Action": "WATCH",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "GEOJITFSL",
+          "PriceBucket": "B4",
+          "FinalDecisionScore": 69.56919625547306,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "FOSECOIND",
+          "PriceBucket": "B1",
+          "FinalDecisionScore": 69.42071419335389,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "ATLANTAELE",
+          "PriceBucket": "B1",
+          "FinalDecisionScore": 69.34506262179143,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "AXISCADES",
+          "PriceBucket": "B1",
+          "FinalDecisionScore": 69.2254283514135,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "COFORGE",
+          "PriceBucket": "B1",
+          "FinalDecisionScore": 68.89934578295643,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "ELGIEQUIP",
+          "PriceBucket": "B2",
+          "FinalDecisionScore": 68.76194165943434,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "COHANCE",
+          "PriceBucket": "B3",
+          "FinalDecisionScore": 68.3674832761414,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "63MOONS",
+          "PriceBucket": "B2",
+          "FinalDecisionScore": 67.57295798112972,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "EBGNG",
+          "PriceBucket": "B2",
+          "FinalDecisionScore": 67.22429501450198,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        },
+        {
+          "Symbol": "EXPLEOSOL",
+          "PriceBucket": "B2",
+          "FinalDecisionScore": 66.55531085667133,
+          "Action": "HOLD",
+          "FinalRisk": "MEDIUM"
+        }
+      ]
     }
   ],
   "last_update": "2026-09-04"

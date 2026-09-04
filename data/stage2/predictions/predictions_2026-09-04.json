@@ -1,10 +1,30 @@
 {
-  "Stage": "Stage 10",
+  "Stage": "Stage 10.1",
   "PredictionDate": "2026-09-04",
   "DataCutoff": "2026-09-03",
   "ModelVariant": "A",
-  "ModelVersion": "stage10-v1.2",
+  "ModelVersion": "stage10.1-v1.0",
   "Regime": "SIDEWAYS",
+  "MarketSnapshot": {
+    "NIFTY": {
+      "Close": 23914.44921875,
+      "Change1D": -0.5875986577431824
+    },
+    "BANKNIFTY": {
+      "Close": 57172.0,
+      "Change1D": -0.4138707742838643
+    },
+    "VIX": {
+      "Close": 11.59000015258789,
+      "Change1D": 0.8703253564990687
+    },
+    "Breadth": {
+      "Advancers": 297,
+      "Decliners": 273,
+      "Ratio": 1.0879120879120878,
+      "Score": 52.10526315789474
+    }
+  },
   "PriceBuckets": [
     ">1000",
     "500-999",
@@ -12,8 +32,9 @@
     "50-99",
     "10-49"
   ],
-  "MaxPerPriceBucket": 2,
-  "MaxSelectedStocks": 5,
+  "BestPerPriceBucket": 5,
+  "MaxSelectedStocks": 25,
+  "GlobalTopNCap": false,
   "MultiHorizons": [
     1,
     3,
@@ -98,12 +119,23 @@
     }
   },
   "SelectedStocks": [
+    "ALLCARGO",
     "BAJAJHIND",
+    "HCC",
+    "FCL",
+    "GEOJITFSL",
+    "FOSECOIND",
     "ATLANTAELE",
+    "AXISCADES",
     "COFORGE",
+    "ELGIEQUIP",
+    "COHANCE",
     "63MOONS",
-    "EBGNG"
+    "EBGNG",
+    "EXPLEOSOL"
   ],
   "StocksScanned": 1000,
+  "DataStocks": 913,
+  "AI": 60,
   "LiquidStocks": 572
 }
