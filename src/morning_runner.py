@@ -105,7 +105,7 @@ def run():
     save_predictions(selected,prediction_date,metadata);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","FinalDecisionScore","Action","FinalRisk"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
-    intraday=generate_intraday_watchlist(list(data_map.keys()))
+    intraday=generate_intraday_watchlist(list(data_map.keys()),cutoff_date=cutoff_date)
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=analyze_ipos(fetch_live_ipos());ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
