@@ -96,7 +96,10 @@ def _bucket_sections(selected, warning=False):
         sort_cols = [c for c in ["TradeConfidence", "Score", "Confidence"] if c in group.columns]
         if sort_cols:
             group = group.sort_values(sort_cols, ascending=False)
-        lines += [f"\n💎 *{bucket}*", *_stock_card(group.iloc[0], warning)]
+        # Show the human-readable bucket label, never the internal B1/B2/B3 code.
+        label = str(group.iloc[0].get("PriceBucketLabel", bucket))
+        if label in {"nan", "None", "-"}: label = bucket
+        lines += [f"\n💎 *{label}*", *_stock_card(group.iloc[0], warning)]
     return lines
 
 
@@ -105,6 +108,7 @@ def _scan(scan):
 
 
 def _market(snapshot, regime):
+    snapshot = snapshot or {}
     n, b, v = snapshot.get("NIFTY", {}), snapshot.get("BANKNIFTY", {}), snapshot.get("VIX", {})
     br = snapshot.get("Breadth", {})
     return [
