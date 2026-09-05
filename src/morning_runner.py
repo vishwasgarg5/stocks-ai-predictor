@@ -1,4 +1,4 @@
-"""Stage 10.1 morning pipeline: prediction generation and reliable Telegram delivery."""
+"""Stage 10.2 morning pipeline: prediction, validation-ready ledgers and decision intelligence."""
 import json
 from pathlib import Path
 import pandas as pd
@@ -15,6 +15,7 @@ from .jump_engine import generate_jump_watchlist
 from .intraday_engine import generate_intraday_watchlist
 from .ipo_runner import get_ipo_report
 from .ledger import prediction_exists,load_predictions,save_predictions,save_jump_predictions,save_intraday_predictions,load_jump_predictions,load_intraday_predictions,morning_report_sent,mark_morning_report_sent
+from .decision_ledger import save_decisions
 from .retraining import load_model_state
 from .telegram_report import send_telegram,morning_report
 from .portfolio_report import portfolio_snapshot
@@ -36,14 +37,11 @@ def _attach_horizons(candidates,data_map,cutoff_date):
             if not h.empty:
                 current=float(row.get("Current_Price",0) or 0)
                 if not current:
-                    valid=data_map[symbol][data_map[symbol].index<=pd.Timestamp(cutoff_date)]
-                    current=float(valid.iloc[-1]["Close"]) if not valid.empty else 0.0
+                    valid=data_map[symbol][data_map[symbol].index<=pd.Timestamp(cutoff_date)];current=float(valid.iloc[-1]["Close"]) if not valid.empty else 0.0
                 for horizon in [1,3,5,7,20]:
                     m=h[h["HorizonDays"]==horizon]
                     if not m.empty:
-                        expected=float(m.iloc[0]["Expected_Return"])
-                        row[f"Horizon_{horizon}D"]=expected
-                        row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0
+                        expected=float(m.iloc[0]["Expected_Return"]);row[f"Horizon_{horizon}D"]=expected;row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0
         except Exception as exc:print(f"{symbol}: horizon prediction failed: {exc}");row["MultiHorizonExpectedReturn"]=0.0
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
@@ -64,13 +62,10 @@ def _portfolio_payload():
         df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[];s["Available"]=not df.empty
         if not df.empty:
             for _,r in df.sort_values("PnL").head(8).iterrows():
-                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=str(r.get("Recommended_Qty",0));newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";pa=str(r.get("Averaging_Action","-"))
-                s["Rows"].append(f"{r.Stock}: CMP {price} | Avg {avg} | AI {target} | {ret} | {pa} {rec if pa=='AVERAGE' else ''} | NewAvg {newavg}")
+                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=str(r.get("Recommended_Qty",0));newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";pa=str(r.get("Averaging_Action","-"));s["Rows"].append(f"{r.Stock}: CMP {price} | Avg {avg} | AI {target} | {ret} | {pa} {rec if pa=='AVERAGE' else ''} | NewAvg {newavg}")
         else:s["Rows"].append("Portfolio data unavailable")
         return s
-    except Exception as exc:
-        print(f"Portfolio report unavailable: {exc}")
-        return {"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{},"Rows":["Portfolio data unavailable"],"Available":False}
+    except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{},"Rows":["Portfolio data unavailable"],"Available":False}
 
 def _prediction_metadata(prediction_date):
     path=Path(f"data/stage2/predictions/predictions_{prediction_date}.json")
@@ -80,22 +75,19 @@ def _prediction_metadata(prediction_date):
 def _send_existing_report(prediction_date):
     predictions=load_predictions(prediction_date)
     if predictions.empty:return False
-    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date);ipo=get_ipo_report()
-    scan={"Universe":meta.get("StocksScanned",meta.get("Universe",0)),"Data":meta.get("DataStocks",meta.get("StocksWithData",0)),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",meta.get("AICandidates",0)),"Selected":len(predictions)}
-    report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}),ipo=ipo)
-    sent=send_telegram(report)
+    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date);ipo=get_ipo_report();scan={"Universe":meta.get("StocksScanned",meta.get("Universe",0)),"Data":meta.get("DataStocks",meta.get("StocksWithData",0)),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",meta.get("AICandidates",0)),"Selected":len(predictions)}
+    report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}),ipo=ipo);sent=send_telegram(report)
     if sent:mark_morning_report_sent(prediction_date)
     return sent
 
 def run():
     prediction_date=today_ist()
     if not is_weekday():print("Weekend. Morning prediction skipped.");return
-    existing_meta=_prediction_metadata(prediction_date);current_prediction=prediction_exists(prediction_date);existing_current_version=(existing_meta.get("Stage")=="Stage 10.1" and existing_meta.get("ModelVersion")==MODEL_VERSION)
+    existing_meta=_prediction_metadata(prediction_date);current_prediction=prediction_exists(prediction_date);existing_current_version=(existing_meta.get("Stage")=="Stage 10.2" and existing_meta.get("ModelVersion")==MODEL_VERSION)
     if current_prediction and existing_current_version:
         if morning_report_sent(prediction_date):print(f"Morning prediction and report already completed for {prediction_date}.")
-        else:print(f"Current Stage 10.1 prediction exists for {prediction_date}; sending the pending morning report.");_send_existing_report(prediction_date)
+        else:print(f"Current Stage 10.2 prediction exists for {prediction_date}; sending pending report.");_send_existing_report(prediction_date)
         return
-    if current_prediction and not existing_current_version:print(f"Stale prediction detected for {prediction_date} ({existing_meta.get('Stage','unknown')} / {existing_meta.get('ModelVersion','unknown')}); regenerating with {MODEL_VERSION}.")
     universe=load_universe();scan_count=len(universe);raw_data=download_many(universe,HISTORY_PERIOD,workers=8);data_map=filter_liquid_universe(raw_data)
     if len(data_map)<20:raise RuntimeError("Too few liquid stocks.")
     nifty_fallback=get_completed_session_date("morning",prediction_date);cutoff_date=get_data_cutoff_date(data_map,prediction_date,fallback=nifty_fallback)
@@ -113,8 +105,8 @@ def run():
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
     candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime)
     selected=select_top_stocks(bucket_pool,top_n=25,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=FINAL_BEST_PER_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
-    metadata={"Stage":"Stage 10.1","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"MaxSelectedStocks":25,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
-    save_predictions(selected,prediction_date,metadata);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","FinalDecisionScore","Action","FinalRisk"] if c in selected.columns]].to_dict("records")})
+    metadata={"Stage":"Stage 10.2","PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"MaxSelectedStocks":25,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
+    save_predictions(selected,prediction_date,metadata);save_decisions(selected,prediction_date);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","FinalDecisionScore","Action","FinalRisk","CalibratedConfidence","PredictionUncertaintyPct"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
     intraday=generate_intraday_watchlist(list(data_map.keys()),cutoff_date=cutoff_date)
