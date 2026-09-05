@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from .config import HISTORY_PERIOD,FINAL_LEARNING_STATE_FILE,PREDICTIONS_DIR,MULTI_HORIZONS
+from .config import HISTORY_PERIOD,FINAL_LEARNING_STATE_FILE,PREDICTIONS_DIR,MULTI_HORIZONS,EVALUATIONS_DIR
 from .market_data import get_completed_session_date,get_previous_session_date,download_many,get_row_for_date,get_previous_row
 from .ledger import load_predictions,evaluation_exists,save_evaluation,append_daily_metrics,rebuild_stock_reliability,latest_prediction_date
 from .retraining import compare_variants
@@ -71,37 +71,57 @@ def _bucket_metrics(evaluation,predictions):
     return result
 
 def _horizon_evaluations(market_date,data_map):
-    """Evaluate stored 1/3/5/7/20-session forecasts when their target is today's market date."""
-    market=pd.Timestamp(market_date).date();rows=[]
+    """Evaluate every stored horizon forecast that matures today, including stocks no longer selected today."""
+    market=pd.Timestamp(market_date).date();rows=[];files=[];all_symbols=set()
     for path in sorted(PREDICTIONS_DIR.glob("predictions_*.csv")):
         try:
             prediction_date=pd.Timestamp(path.stem.replace("predictions_","")).date();pred=_ensure_price_bucket(pd.read_csv(path))
         except Exception:continue
         if pred.empty or "Symbol" not in pred.columns:continue
+        files.append((prediction_date,pred));all_symbols.update(pred["Symbol"].astype(str).tolist())
+    missing=[s for s in all_symbols if s not in data_map]
+    if missing:
+        try:data_map={**data_map,**download_many(missing,HISTORY_PERIOD,workers=5)}
+        except Exception as exc:print(f"Horizon data download warning: {exc}")
+    for prediction_date,pred in files:
         for horizon in MULTI_HORIZONS:
-            col=f"Horizon_{horizon}D"
-            if col not in pred.columns:continue
+            col=f"Horizon_{horizon}D";close_col=f"Horizon_{horizon}D_Pred_Close"
+            if col not in pred.columns and close_col not in pred.columns:continue
             for _,p in pred.iterrows():
                 symbol=str(p.get("Symbol",""));df=data_map.get(symbol)
                 if df is None or df.empty:continue
-                idx=pd.DatetimeIndex(df.index).normalize();base=pd.Timestamp(prediction_date)
-                matches=np.where(idx==base)[0]
+                idx=pd.DatetimeIndex(df.index).normalize();base=pd.Timestamp(prediction_date);matches=np.where(idx==base)[0]
                 if len(matches)==0:continue
                 target_pos=int(matches[0])+int(horizon)
                 if target_pos>=len(df):continue
                 target_date=idx[target_pos].date()
                 if target_date!=market:continue
-                actual=float(df.iloc[target_pos]["Close"]);current=float(p.get("Current_Price",0) or 0);expected=float(p.get(col,0) or 0);predicted=current*(1+expected/100) if current else np.nan
+                actual=float(df.iloc[target_pos]["Close"]);current=float(p.get("Current_Price",p.get("Current_Close",0)) or 0)
+                if close_col in pred.columns and pd.notna(p.get(close_col)):predicted=float(p.get(close_col))
+                else:
+                    expected=float(p.get(col,0) or 0);predicted=current*(1+expected/100) if current else np.nan
                 if not np.isfinite(predicted):continue
                 diff=actual-predicted;ape=diff/max(abs(actual),1e-8)*100
-                rows.append({"Symbol":symbol,"PredictionDate":str(prediction_date),"HorizonDays":horizon,"Pred_Close":predicted,"Actual_Close":actual,"Diff":diff,"APE":ape,"PriceBucket":p.get("PriceBucket","-")})
-    return pd.DataFrame(rows)
+                expected_return=(predicted/current-1)*100 if current else 0.0;actual_return=(actual/current-1)*100 if current else 0.0
+                rows.append({"EvaluatedDate":str(market),"Symbol":symbol,"PredictionDate":str(prediction_date),"HorizonDays":horizon,"Pred_Close":predicted,"Actual_Close":actual,"Diff":diff,"APE":ape,"Expected_Return":expected_return,"Actual_Return":actual_return,"DirectionCorrect":(expected_return>0 and actual_return>0) or (expected_return<0 and actual_return<0) or (abs(expected_return)<1e-12 and abs(actual_return)<1e-12),"PredictionConfidence":float(p.get("Confidence",p.get("TradeConfidence",0)) or 0),"PriceBucket":p.get("PriceBucket","-")})
+    result=pd.DataFrame(rows)
+    if not result.empty:
+        path=EVALUATIONS_DIR/"horizon_evaluations.csv";EVALUATIONS_DIR.mkdir(parents=True,exist_ok=True)
+        existing=pd.DataFrame()
+        if path.exists():
+            try:existing=pd.read_csv(path)
+            except Exception:existing=pd.DataFrame()
+        combined=pd.concat([existing,result],ignore_index=True) if not existing.empty else result.copy()
+        key=["EvaluatedDate","PredictionDate","Symbol","HorizonDays"]
+        combined=combined.drop_duplicates(subset=key,keep="last").sort_values(key)
+        combined.to_csv(path,index=False)
+    return result
 
 def _horizon_metrics(h):
     if h is None or h.empty:return {}
     out={}
     for horizon,g in h.groupby("HorizonDays"):
-        out[str(int(horizon))]={"Samples":int(len(g)),"MAPE":float(g["APE"].abs().mean()),"Accuracy":float((1-g["APE"].abs()/100).clip(0,1).mean()*100)}
+        out[str(int(horizon))]={"Samples":int(len(g)),"MAPE":float(g["APE"].abs().mean()),"Accuracy":float((1-g["APE"].abs()/100).clip(0,1).mean()*100),"DirectionAccuracy":float(g["DirectionCorrect"].mean()*100) if "DirectionCorrect" in g else 0.0}
     return out
 
 def _portfolio_payload():
@@ -131,7 +151,7 @@ def run():
         if df is None:continue
         actual=get_row_for_date(df,market_date);previous=get_previous_row(df,market_date)
         if actual is None or previous is None:continue
-        row={"MarketDate":str(market_date),"PredictionDate":str(prediction_date),"Symbol":p["Symbol"],"PriceBucket":p.get("PriceBucket","-"),"Pred_Open":float(p["Pred_Open"]),"Pred_High":float(p["Pred_High"]),"Pred_Low":float(p["Pred_Low"]),"Pred_Close":float(p["Pred_Close"]),"Pred_Volume":float(p.get("Pred_Volume",0)),"Actual_Open":float(actual["Open"]),"Actual_High":float(actual["High"]),"Actual_Low":float(actual["Low"]),"Actual_Close":float(actual["Close"]),"Actual_Volume":float(actual["Volume"]),"Pred_Direction":p["Direction"],"Actual_Direction":direction_from_prices(previous["Close"],actual["Close"])}
+        row={"MarketDate":str(market_date),"PredictionDate":str(prediction_date),"Symbol":p["Symbol"],"PriceBucket":p.get("PriceBucket","-"),"Pred_Open":float(p["Pred_Open"]),"Pred_High":float(p["Pred_High"]),"Pred_Low":float(p["Pred_Low"]),"Pred_Close":float(p["Pred_Close"]),"Pred_Volume":float(p.get("Pred_Volume",0)),"Actual_Open":float(actual["Open"]),"Actual_High":float(actual["High"]),"Actual_Low":float(actual["Low"]),"Actual_Close":float(actual["Close"]),"Actual_Volume":float(actual["Volume"]),"Pred_Direction":p["Direction"],"Actual_Direction":direction_from_prices(previous["Close"],actual["Close"]),"PredictionConfidence":float(p.get("Confidence",p.get("TradeConfidence",0)) or 0)}
         row["DirectionCorrect"]=row["Pred_Direction"]==row["Actual_Direction"]
         for target in ["Open","High","Low","Close","Volume"]:
             pred=row[f"Pred_{target}"];act=row[f"Actual_{target}"];row[f"Diff_{target}"]=act-pred;row[f"APE_{target}"]=(act-pred)/max(abs(act),1e-8)*100
