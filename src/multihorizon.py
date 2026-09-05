@@ -6,18 +6,17 @@ from sklearn.ensemble import ExtraTreesRegressor,RandomForestRegressor
 from xgboost import XGBRegressor
 from .features import build_features,get_feature_columns
 HORIZONS=(1,3,5,7,20)
-
 def _models(seed=42):
     return [XGBRegressor(n_estimators=180,max_depth=4,learning_rate=0.04,subsample=0.85,colsample_bytree=0.85,objective="reg:squarederror",random_state=seed,n_jobs=2),RandomForestRegressor(n_estimators=180,max_depth=10,min_samples_leaf=2,random_state=seed,n_jobs=2),ExtraTreesRegressor(n_estimators=180,max_depth=12,min_samples_leaf=2,random_state=seed,n_jobs=2)]
 def _weights(errors):
     e=np.asarray(errors,float);e[~np.isfinite(e)]=1.;inv=1/np.maximum(e,1e-6);return inv/inv.sum()
 def _mape(y,p):return float(np.mean(np.abs((np.asarray(p)-np.asarray(y))/np.maximum(np.abs(np.asarray(y)),1e-6)))*100)
 def _train_target(work,features,target):
-    split=max(60,int(len(work)*.8));split=min(split,len(work)-1);Xtr,Xv=work[features].iloc[:split],work[features].iloc[split:];ytr,yv=work[target].iloc[:split],work[target].iloc[split:];errors=[]
-    for m in _models():m.fit(Xtr,ytr);errors.append(_mape(yv,m.predict(Xv)))
-    weights=_weights(errors);final=_models()
+    split=max(60,int(len(work)*.8));split=min(split,len(work)-1);Xtr,Xv=work[features].iloc[:split],work[features].iloc[split:];ytr,yv=work[target].iloc[:split],work[target].iloc[split:];validation_models=_models();errors=[];vp=[]
+    for m in validation_models:m.fit(Xtr,ytr);vp.append(m.predict(Xv));errors.append(_mape(yv,vp[-1]))
+    weights=_weights(errors);ensemble=sum(w*p for w,p in zip(weights,vp));final=_models()
     for m in final:m.fit(work[features],work[target])
-    return {"models":final,"weights":weights.tolist(),"validation_mape":_mape(yv,sum(w*m.predict(Xv) for w,m in zip(weights,_models()))),"samples":len(work)}
+    return {"models":final,"weights":weights.tolist(),"validation_mape":_mape(yv,ensemble),"samples":len(work)}
 def train_horizon_models(df,cutoff_date):
     x=build_features(df);x=x[x.index<=pd.Timestamp(cutoff_date)].copy();features=get_feature_columns();result={"features":features,"horizons":{}}
     for h in HORIZONS:
