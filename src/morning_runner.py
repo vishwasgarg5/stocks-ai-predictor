@@ -1,4 +1,4 @@
-"""Stage 10.3 morning pipeline: prediction, ranking, risk and decision intelligence."""
+"""Stage 10.4 morning pipeline: prediction, ranking, probability, risk and abstention."""
 import json
 from pathlib import Path
 import numpy as np
@@ -42,23 +42,21 @@ def _attach_horizons(candidates,data_map,cutoff_date):
                 for horizon in [1,3,5,7,20]:
                     m=h[h["HorizonDays"]==horizon]
                     if not m.empty:
-                        expected=float(m.iloc[0]["Expected_Return"]);row[f"Horizon_{horizon}D"]=expected;row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0
+                        expected=float(m.iloc[0]["Expected_Return"]);row[f"Horizon_{horizon}D"]=expected;row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0;row[f"Horizon_{horizon}D_MAPE"]=float(m.iloc[0].get("ValidationMAPE",np.nan))
         except Exception as exc:print(f"{symbol}: horizon prediction failed: {exc}");row["MultiHorizonExpectedReturn"]=0.0
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
 
 def _attach_benchmarks_and_risk(candidates,data_map,cutoff_date):
-    out=candidates.copy();vol=[];bench=[]
+    out=candidates.copy();vol_bucket=[];vol_pct=[];bench=[]
     for _,r in out.iterrows():
         df=data_map.get(r["Symbol"])
-        if df is None or df.empty:vol.append("UNKNOWN");bench.append(0.0);continue
+        if df is None or df.empty:vol_bucket.append("UNKNOWN");vol_pct.append(np.nan);bench.append(0.0);continue
         valid=df[df.index<=pd.Timestamp(cutoff_date)].copy();close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100
-        v=float(ret.tail(20).std()) if len(ret)>=5 else 0.0
-        vol.append("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM"));bench.append(benchmark_expected_return(float(close.iloc[-1]) if len(close) else 0.0,valid))
-    out["VolatilityBucket"]=vol;out["BenchmarkExpectedReturn"]=bench;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-pd.Series(bench,index=out.index)
-    out["CrossSectionRank"]=out.groupby("PriceBucket")["FinalScore" if "FinalScore" in out.columns else "Score"].rank(ascending=False,method="min")
-    out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count")
-    out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100
+        v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan
+        vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")));bench.append(benchmark_expected_return(float(close.iloc[-1]) if len(close) else 0.0,valid))
+    out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=bench;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-pd.Series(bench,index=out.index)
+    rank_col="FinalScore" if "FinalScore" in out.columns else "Score";out["CrossSectionRank"]=out.groupby("PriceBucket")[rank_col].rank(ascending=False,method="min");out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count");out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100
     if "SectorReturn20D" in out.columns:
         sector_median=out.groupby("Sector")["SectorReturn20D"].transform("median");out["SectorRelative20D"]=pd.to_numeric(out["SectorReturn20D"],errors="coerce")-pd.to_numeric(sector_median,errors="coerce")
     else:out["SectorRelative20D"]=0.0
@@ -114,17 +112,17 @@ def run():
     for symbol,df in data_map.items():
         try:scored.append((symbol,technical_score(df[df.index<=pd.Timestamp(cutoff_date)])))
         except Exception:pass
-    scored.sort(key=lambda x:x[1],reverse=True);candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]];candidate_rows=[];bundles={}
+    scored.sort(key=lambda x:x[1],reverse=True);candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]];candidate_rows=[]
     for symbol in candidate_symbols:
-        try:bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);bundles[symbol]=bundle;result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date)})
+        try:bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date)})
         except Exception as exc:print(f"{symbol}: prediction failed: {exc}")
     if not candidate_rows:raise RuntimeError("Unable to generate predictions.")
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
-    candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime);bucket_pool=_attach_benchmarks_and_risk(bucket_pool,data_map,cutoff_date)
+    candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,{});bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime);bucket_pool=_attach_benchmarks_and_risk(bucket_pool,data_map,cutoff_date)
     selected=select_top_stocks(bucket_pool,top_n=25,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=FINAL_BEST_PER_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
-    metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"MaxSelectedStocks":25,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
-    save_predictions(selected,prediction_date,metadata);save_decisions(selected,prediction_date);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","VolatilityBucket","CrossSectionPercentile","SectorRelative20D","BenchmarkEdgePct","FinalDecisionScore","Action","FinalRisk","CalibratedConfidence","PredictionUncertaintyPct"] if c in selected.columns]].to_dict("records")})
+    metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":FINAL_BEST_PER_BUCKET,"MaxSelectedStocks":25,"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
+    save_predictions(selected,prediction_date,metadata);save_decisions(selected,prediction_date);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","VolatilityBucket","VolatilityPct","CrossSectionPercentile","SectorRelative20D","BenchmarkEdgePct","RiskAdjustedReturn","FinalDecisionScore","Action","FinalRisk","CalibratedConfidence","PredictionUncertaintyPct","TargetHitProb_3_0Pct","DownsideHitProb_2Pct"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
     intraday=generate_intraday_watchlist(list(data_map.keys()),cutoff_date=cutoff_date)
