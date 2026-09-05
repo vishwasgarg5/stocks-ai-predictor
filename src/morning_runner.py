@@ -34,9 +34,16 @@ def _attach_horizons(candidates,data_map,cutoff_date):
         try:
             hb=train_horizon_models(data_map[symbol],cutoff_date);h=add_multihorizon_predictions(data_map[symbol],{"horizons":hb},cutoff_date);row["MultiHorizonExpectedReturn"]=0.0 if h.empty else float(h["Expected_Return"].astype(float).clip(-50,50).median())
             if not h.empty:
+                current=float(row.get("Current_Price",0) or 0)
+                if not current:
+                    valid=data_map[symbol][data_map[symbol].index<=pd.Timestamp(cutoff_date)]
+                    current=float(valid.iloc[-1]["Close"]) if not valid.empty else 0.0
                 for horizon in [1,3,5,7,20]:
                     m=h[h["HorizonDays"]==horizon]
-                    if not m.empty:row[f"Horizon_{horizon}D"]=float(m.iloc[0]["Expected_Return"])
+                    if not m.empty:
+                        expected=float(m.iloc[0]["Expected_Return"])
+                        row[f"Horizon_{horizon}D"]=expected
+                        row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0
         except Exception as exc:print(f"{symbol}: horizon prediction failed: {exc}");row["MultiHorizonExpectedReturn"]=0.0
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
