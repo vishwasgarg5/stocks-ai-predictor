@@ -1,6 +1,6 @@
-# AI NSE Stock Predictor — Stage 10.1
+# AI NSE Stock Predictor — Stage 10.2
 
-Production-oriented NSE stock prediction and decision-support system covering the cumulative **Stage 1 → Stage 10.1** pipeline.
+Production-oriented NSE stock prediction and decision-support system covering the cumulative **Stage 1 → Stage 10.2** pipeline.
 
 > Predictions are model outputs, not guaranteed returns or investment advice.
 
@@ -8,89 +8,39 @@ Production-oriented NSE stock prediction and decision-support system covering th
 
 ```text
 NSE UNIVERSE
-    ↓
-DATA QUALITY + LIQUIDITY
-    ↓
-TECHNICAL FEATURES
-    ↓
-AI OHLC PREDICTION
-    ↓
-PRICE BUCKETS
-    ↓
-1D / 3D / 5D / 7D / 20D
-    ↓
-MARKET + SECTOR + RISK
-    ↓
-CONFIDENCE + DECISION ENGINE
-    ↓
-BEST QUALIFIED PICK FROM EACH PRICE BUCKET
-    ↓
-+5% JUMP WATCH TOP 5
-    ↓
-INTRADAY TOP 5
-    ↓
-TELEGRAM
-    ↓
-MARKET CLOSE
-    ↓
-PREDICTION vs ACTUAL
-    ↓
-ACCURACY + RELIABILITY
-    ↓
-CHAMPION / CHALLENGER
-    ↓
-GITHUB STATE UPDATE
+ ↓ DATA QUALITY + LIQUIDITY
+ ↓ CAUSAL TECHNICAL FEATURES + LEAKAGE AUDIT
+ ↓ AI OHLCV PREDICTION
+ ↓ PRICE BUCKETS
+ ↓ 1D / 3D / 5D / 7D / 20D
+ ↓ MARKET / SECTOR / RISK / UNCERTAINTY
+ ↓ CONFIDENCE CALIBRATION
+ ↓ BUY / WATCH / HOLD / AVOID / NO TRADE
+ ↓ GITHUB PREDICTION + DECISION LEDGERS
+ ↓ MARKET CLOSE
+ ↓ OHLCV + HORIZON + DECISION OUTCOME EVALUATION
+ ↓ BUCKET × HORIZON × CONFIDENCE RELIABILITY
+ ↓ CHAMPION / CHALLENGER + LIVE HEALTH GUARD
+ ↓ AUTOMATIC ROLLBACK WHEN LIVE QUALITY DEGRADES
+ ↓ GITHUB STATE UPDATE
 ```
 
-## Stage 1 → 10.1
+## Stage 10.2 improvements
 
-```text
-1 Foundation
-   ↓
-2 Production prediction
-   ↓
-3 Advanced multi-horizon forecasting
-   ↓
-4 Market intelligence
-   ↓
-5 Accuracy & calibration
-   ↓
-6 Adaptive AI
-   ↓
-7 Advanced market intelligence
-   ↓
-8 Event/news intelligence
-   ↓
-9 Decision intelligence
-   ↓
-10 Self-improving AI
-   ↓
-10.1 Precision + bucket-wise decision/reporting
-```
+- Explicit stored predicted close for every 1D/3D/5D/7D/20D forecast.
+- Historical horizon forecasts are evaluated when they mature, even if the stock is no longer selected.
+- Persistent horizon evaluation ledger with predicted/actual/error/direction/confidence fields.
+- Persistent decision-outcome ledger measuring decision return, maximum favourable/adverse move and win/loss outcome.
+- Confidence calibration and uncertainty-aware **NO TRADE** filtering.
+- Bucket-wise, horizon-wise and confidence-band reliability.
+- Statistical confidence interval for direction accuracy in weekly reporting.
+- Model-health score and live-quality monitoring.
+- Champion/challenger promotion guarded by live performance.
+- Automatic live rollback to the previous model when quality materially deteriorates.
+- Explicit feature causality/leakage audit.
+- All persistent state remains GitHub-only; no local database is required.
 
-## Stage 10.1 morning report
-
-The **Top Stocks** section is no longer globally limited to five stocks.
-
-The model evaluates the configured price buckets independently and returns **the single best qualified stock from each bucket**. Buckets with no qualified stock are omitted rather than filled with weak candidates.
-
-Each bucket has its **own separate Telegram table** containing:
-
-- Stock
-- CMP
-- Open
-- High
-- Low
-- Close
-- Volume
-- AI Target
-- Expected %
-- Stop Loss
-- R/R
-- Confidence
-- Decision
-
-Current configured buckets:
+## Price buckets
 
 ```text
 >1000
@@ -100,55 +50,52 @@ Current configured buckets:
 10-49
 ```
 
-The final number of Top Stock picks is therefore dynamic (up to one per configured bucket), not an arbitrary global Top-5 cap.
+Up to five qualified stocks can be selected per configured bucket, subject to score, confidence, uncertainty and risk gates.
 
-Supporting information includes market snapshot, sector strength, IPO/new-listing information when verified, portfolio snapshot, scan counts, model accuracy and model-health warnings.
+## Forecasts
 
-## Evening report
+Every selected stock stores:
 
-```text
-PREDICTED OHLC
-      ↓
-ACTUAL OHLC
-      ↓
-DIFFERENCE
-      ↓
-DIRECTION ACCURACY
-      ↓
-PRICE-BUCKET RESULTS
-      ↓
-MODEL LEARNING
-      ↓
-CHAMPION / CHALLENGER
-```
+- Current OHLCV
+- Next-session predicted OHLCV
+- Expected return and direction
+- Calibrated confidence
+- Prediction interval
+- 1D / 3D / 5D / 7D / 20D expected return
+- 1D / 3D / 5D / 7D / 20D predicted close
+- Price bucket
+- Final decision and risk
 
-The evening job validates the bucket-selected predictions against the completed market session and updates reliability/learning state.
+## Validation and learning
 
-## Self-improving AI
+The evening pipeline evaluates:
 
-The model tracks prediction error, direction accuracy, stock reliability, confidence, uncertainty and model drift. A challenger is promoted only when it clears the configured improvement threshold.
+1. Predicted vs actual OHLCV.
+2. Direction accuracy.
+3. Every matured multi-horizon forecast.
+4. Price-bucket performance.
+5. Bucket × horizon performance.
+6. Confidence-band performance.
+7. Decision outcomes.
+8. Live model quality and drift.
 
-## Data integrity
+Validated observations are persisted in GitHub state and used for reliability weighting, model selection and rollback protection.
 
-- Historical predictions use only information available at the prediction cutoff.
-- Actual market data is used only for post-market validation.
-- Missing optional external information is not fabricated.
-- Price-bucket and quality gates are applied before final selection.
-- Persistent state is GitHub-only; no local database is required.
+## Weekly report
 
-## Current release
+The weekly report includes:
 
-- **Stage:** Stage 10.1 — Precision & Bucket Decision AI
-- **Model:** `stage10.1-v1.0`
-- **Forecasts:** 1D, 3D, 5D, 7D, 20D
-- **Universe cap:** 1,000 NSE stocks
-- **AI prescreen:** 60 candidates
-- **Final selection:** best qualified stock per price bucket
-- **Price-bucket candidate pool:** maximum 2 per bucket before final precision selection
-- **Jump Watch:** Top 5
-- **Intraday:** Top 5
-- **Validation:** OHLCV error + direction accuracy
-- **Learning:** champion/challenger + drift controls
+- OHLC MAPE and direction accuracy
+- 95% direction-accuracy confidence interval
+- Close-error distribution (≤1%, ≤2%, ≤3%, ≤5%)
+- Price-bucket performance
+- Horizon performance
+- Bucket × horizon best/worst combinations
+- Confidence calibration
+- Decision win rate and average return
+- Learning trend
+- Champion/challenger status
+- Model health score
 
 ## Automation
 
@@ -173,11 +120,11 @@ python -m src.weekly_report
 ## Repository structure
 
 ```text
-src/                    Core Stage 10.1 application
+src/                    Core Stage 10.2 application
 .github/workflows/      Morning / Evening / Weekly only
 data/stage2/            GitHub-persisted predictions, evaluations and state
 portfolio_manager/      Separate portfolio-manager project components
 requirements.txt        Python dependencies
-tests/                  Development regression tests
+tests/                  Development tests
 README.md               Project documentation
 ```
