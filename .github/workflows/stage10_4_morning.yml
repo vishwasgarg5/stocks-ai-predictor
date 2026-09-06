@@ -2,7 +2,7 @@ name: Stage 10.4 Morning Prediction
 
 on:
   schedule:
-    - cron: "45 2 * * 1-5" # 08:15 IST, one hour before NSE open
+    - cron: "30 22 * * 0-4" # 04:00 IST, Monday-Friday
   workflow_dispatch:
 
 concurrency:
