@@ -25,11 +25,11 @@ def test_core_modules_import():
     for name in CORE_MODULES:
         try:importlib.import_module(name)
         except Exception as exc:failures.append(f"{name}: {type(exc).__name__}: {exc}")
-    assert not failures,"Stage 10.4 import failures:\n"+"\n".join(failures)
+    assert not failures,"Stage 10.5 import failures:\n"+"\n".join(failures)
 
-def test_config_is_stage10_4():
+def test_config_is_stage10_5():
     from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS
-    assert MODEL_VERSION.startswith("stage10.4") and STAGE_NAME.startswith("Stage 10.4") and HISTORY_PERIOD=="4mo" and TOP_N is None and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,20)
+    assert MODEL_VERSION.startswith("stage10.5") and STAGE_NAME.startswith("Stage 10.5") and HISTORY_PERIOD=="4mo" and TOP_N is None and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,20)
 
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
@@ -85,11 +85,12 @@ def test_final_manifest_contract():
     from src.final_intelligence import final_stage_manifest
     m=final_stage_manifest();assert "Stage10.4" in m and "Validation" in m and "Abstention" in m and "Learning" in m
 
-def test_portfolio_engine_has_sell_and_average_logic():
-    from src.portfolio_report import _sell_window,_average_plan
+def test_portfolio_engine_has_sell_average_and_timing_logic():
+    from src.portfolio_report import _sell_window,_avg_window,_plan
     assert _sell_window({"Horizon_1D":11},110,100,"2026-09-04")=="2026-09-07"
+    assert _avg_window({"Horizon_3D":-3,"Horizon_7D":8},80,100,"2026-09-04").startswith("2026-09-07")
     row=pd.Series({"Quantity":100.,"Current_Price":80.,"Average_Price":100.,"AI_Target":120.,"Reported_Return":np.nan,"Reported_PnL":np.nan,"PredictionDate":"2026-09-04","Horizon_5D":30.,"Horizon_1D":5.,"Horizon_3D":10.,"Horizon_7D":35.,"Horizon_20D":50.,"CalibratedConfidence":90.})
-    out=_average_plan(row.copy());assert out["Decision"] in {"AVG","HOLD / RECOVERY","HOLD"} and out["Profit_Target_Price"]==110.
+    out=_plan(row.copy());assert out["Decision"] in {"AVG","HOLD / RECOVERY","HOLD"} and out["Profit_Target_Price"]==110.
 
 def test_morning_report_includes_buckets_and_portfolio_sections():
     from src.telegram_report import morning_report
