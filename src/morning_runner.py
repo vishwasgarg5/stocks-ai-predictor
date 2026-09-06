@@ -3,15 +3,15 @@ import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,STAGE_NAME,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,VOLATILITY_LOW_PCT,VOLATILITY_HIGH_PCT
-from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime,get_market_snapshot
+from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,STAGE_NAME,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,VOLATILITY_LOW_PCT,VOLATILITY_HIGH_PCT,NIFTY_SYMBOL
+from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime,get_market_snapshot,get_nifty_data
 from .features import technical_score
 from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
 from .multihorizon import train_horizon_models
 from .selection import select_top_stocks,score_candidates
 from .stage4_engine import add_stage4_context
 from .stage45_engine import add_prediction_uncertainty,add_market_risk
-from .final_intelligence import apply_final_intelligence,update_learning_state,final_stage_manifest,benchmark_expected_return
+from .final_intelligence import apply_final_intelligence,update_learning_state,final_stage_manifest
 from .jump_engine import generate_jump_watchlist
 from .intraday_engine import generate_intraday_watchlist
 from .ipo_runner import get_ipo_report
@@ -49,15 +49,22 @@ def _attach_horizons(candidates,data_map,cutoff_date):
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
 
-def _attach_benchmarks_and_risk(candidates,data_map,cutoff_date):
-    out=candidates.copy();vol_bucket=[];vol_pct=[];bench=[]
+def _benchmark_return(benchmark_history):
+    if benchmark_history is None or benchmark_history.empty:return 0.0
+    close=pd.to_numeric(benchmark_history.get("Close"),errors="coerce").dropna()
+    if len(close)<2:return 0.0
+    return float((close.iloc[-1]/close.iloc[-6]-1)*100) if len(close)>=6 else float((close.iloc[-1]/close.iloc[-2]-1)*100)
+
+def _attach_benchmarks_and_risk(candidates,data_map,cutoff_date,benchmark_history=None):
+    out=candidates.copy();vol_bucket=[];vol_pct=[]
+    benchmark_return=_benchmark_return(benchmark_history)
     for _,r in out.iterrows():
         df=data_map.get(r["Symbol"])
-        if df is None or df.empty:vol_bucket.append("UNKNOWN");vol_pct.append(np.nan);bench.append(0.0);continue
+        if df is None or df.empty:vol_bucket.append("UNKNOWN");vol_pct.append(np.nan);continue
         valid=df[df.index<=pd.Timestamp(cutoff_date)].copy();close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100
         v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan
-        vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")));bench.append(benchmark_expected_return(float(close.iloc[-1]) if len(close) else 0.0,valid))
-    out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=bench;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-pd.Series(bench,index=out.index)
+        vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")))
+    out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=benchmark_return;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-benchmark_return
     rank_col="FinalScore" if "FinalScore" in out.columns else "Score";out["CrossSectionRank"]=out.groupby("PriceBucket")[rank_col].rank(ascending=False,method="min");out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count");out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100
     if "SectorReturn20D" in out.columns:
         sector_median=out.groupby("Sector")["SectorReturn20D"].transform("median");out["SectorRelative20D"]=pd.to_numeric(out["SectorReturn20D"],errors="coerce")-pd.to_numeric(sector_median,errors="coerce")
@@ -110,7 +117,9 @@ def run():
     if len(data_map)<20:raise RuntimeError("Too few liquid stocks.")
     nifty_fallback=get_completed_session_date("morning",prediction_date);cutoff_date=get_data_cutoff_date(data_map,prediction_date,fallback=nifty_fallback)
     if cutoff_date is None:raise RuntimeError("Unable to determine completed market cutoff.")
-    regime=get_market_regime(cutoff_date)["name"];variant=load_model_state().get("active_variant","A");snapshot=get_market_snapshot(data_map,cutoff_date);scored=[];bundles={}
+    regime=get_market_regime(cutoff_date)["name"];variant=load_model_state().get("active_variant","A");snapshot=get_market_snapshot(data_map,cutoff_date);benchmark_history=get_nifty_data("3mo",NIFTY_SYMBOL)
+    if not benchmark_history.empty:benchmark_history=benchmark_history[benchmark_history.index.date<=pd.Timestamp(cutoff_date).date()]
+    scored=[];bundles={}
     for symbol,df in data_map.items():
         try:scored.append((symbol,technical_score(df[df.index<=pd.Timestamp(cutoff_date)])))
         except Exception:pass
@@ -121,9 +130,9 @@ def run():
     if not candidate_rows:raise RuntimeError("Unable to generate predictions.")
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
-    candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime);bucket_pool=_attach_benchmarks_and_risk(bucket_pool,data_map,cutoff_date)
+    candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime);bucket_pool=_attach_benchmarks_and_risk(bucket_pool,data_map,cutoff_date,benchmark_history)
     selected=select_top_stocks(bucket_pool,top_n=None,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
-    metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":"ALL_QUALIFIED","MaxSelectedStocks":len(selected),"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
+    metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"BenchmarkSymbol":NIFTY_SYMBOL,"BenchmarkExpectedReturn5D":_benchmark_return(benchmark_history),"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":"ALL_QUALIFIED","MaxSelectedStocks":len(selected),"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
     save_predictions(selected,prediction_date,metadata);save_decisions(selected,prediction_date);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","VolatilityBucket","VolatilityPct","CrossSectionPercentile","SectorRelative20D","BenchmarkEdgePct","RiskAdjustedReturn","FinalDecisionScore","Action","FinalRisk","CalibratedConfidence","PredictionUncertaintyPct","TargetHitProb_3_0Pct","DownsideHitProb_2Pct"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
