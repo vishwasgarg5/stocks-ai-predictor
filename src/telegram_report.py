@@ -55,8 +55,7 @@ def _stock_rows(group):
 
 def _bucket_sections(selected,title="QUALIFIED STOCKS BY PRICE BUCKET"):
     if selected is None or selected.empty:return ["No qualifying stock today."]
-    lines=[f"🎯 *{title}*"]
-    buckets=list(PRICE_BUCKET_NAMES)+[b for b in selected.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
+    lines=[f"🎯 *{title}*"];buckets=list(PRICE_BUCKET_NAMES)+[b for b in selected.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
     for bucket in buckets:
         if "PriceBucket" not in selected.columns:continue
         group=selected[selected["PriceBucket"].astype(str)==bucket].copy()
@@ -87,11 +86,23 @@ def _horizon_table(selected):
 
 def _portfolio(p):
     if not p:return []
-    lines=["💼 *PORTFOLIO*",f"Positions: {p.get('Positions',0)}  •  Value: ₹{p.get('Value',0):,.0f}  •  P&L: ₹{p.get('PnL',0):+,.0f} ({p.get('Return',0):+.2f}%)"];rows=[]
+    lines=["💼 *AI PORTFOLIO MANAGER*",f"Positions: {p.get('Positions',0)}  •  Value: ₹{p.get('Value',0):,.0f}  •  P&L: ₹{p.get('PnL',0):+,.0f} ({p.get('Return',0):+.2f}%)"]
+    rows=[]
     for x in p.get("Rows",[]):
-        if isinstance(x,dict):rows.append([x.get("Stock","-"),x.get("Quantity","-"),_fmt(x.get("Average_Price")),_fmt(x.get("Current_Price")),_pct(x.get("Return_Pct")),x.get("AI_Action",x.get("Action","-"))])
+        if isinstance(x,dict):
+            rows.append([x.get("Stock","-"),x.get("Quantity","-"),x.get("Decision","-"),x.get("Current_Price","-"),x.get("Average_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","-")])
         else:lines.append(f"• {x}")
-    if rows:lines += _table(["Stock","Qty","Avg","CMP","P/L%","Action"],rows)
+    if rows:lines += ["📌 *DAILY PORTFOLIO ACTION*",*_table(["Stock","Qty","Decision","CMP","Avg","10% Target","Sell Window"],rows)]
+    if p.get("AveragePlans"):
+        lines += ["","➕ *AVERAGING PLANS*"]
+        rows=[]
+        for x in p["AveragePlans"]:rows.append([x.get("Stock","-"),x.get("Recommended_Qty",0),x.get("Current_Price","-"),x.get("New_Average_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","-")])
+        lines += _table(["Stock","Add Qty","CMP","New Avg","Target","Sell Window"],rows)
+    if p.get("SellAlerts"):
+        lines += ["","🚨 *SELL / PROFIT-BOOK ALERTS*"]
+        rows=[]
+        for x in p["SellAlerts"]:rows.append([x.get("Stock","-"),x.get("Current_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","NOW"),x.get("Reason","-")])
+        lines += _table(["Stock","CMP","Target","When","Reason"],rows)
     return lines
 
 def _ipo(ipo):
