@@ -1,8 +1,7 @@
-"""Stage 10.1 precision selection: up to five best qualified stocks per price bucket."""
+"""Stage 10.4 precision selection: all qualified stocks by price bucket."""
 import pandas as pd
-from .config import STOCK_RELIABILITY_FILE,MAX_PREDICTION_UNCERTAINTY,TOP_N
+from .config import STOCK_RELIABILITY_FILE,MAX_PREDICTION_UNCERTAINTY,TOP_N,MAX_PER_PRICE_BUCKET
 from .utils import clamp
-
 
 def load_reliability():
     if not STOCK_RELIABILITY_FILE.exists(): return {}
@@ -14,19 +13,16 @@ def load_reliability():
         return out
     except Exception: return {}
 
-
 def expected_return_score(v): return clamp(50+float(v)*5)
 def multi_horizon_score(v):
     try: return clamp(50+float(v)*4)
     except Exception: return 50.0
-
 
 def regime_direction_score(d,regime):
     if regime=="BULL": return {"UP":90,"NEUTRAL":55,"DOWN":35}.get(d,50)
     if regime=="BEAR": return {"UP":35,"NEUTRAL":55,"DOWN":80}.get(d,50)
     if regime=="HIGH VOL": return 45
     return {"UP":70,"NEUTRAL":55,"DOWN":45}.get(d,50)
-
 
 def direction_return_alignment(direction,expected_return):
     try: r=float(expected_return)
@@ -35,7 +31,6 @@ def direction_return_alignment(direction,expected_return):
     if d=="UP": return clamp(50+r*25)
     if d=="DOWN": return clamp(50-r*25)
     return clamp(100-abs(r)*20)
-
 
 def horizon_alignment(row):
     values=[]
@@ -49,14 +44,11 @@ def horizon_alignment(row):
     agreeing=(sum(v>0 for v in values) if direction=="UP" else sum(v<0 for v in values) if direction=="DOWN" else sum(abs(v)<=1.5 for v in values))
     return 100.0*agreeing/len(values)
 
-
 def calculate_trade_confidence(row):
     return clamp(0.27*float(row.get("Confidence",50))+0.13*float(row.get("Direction_Confidence",50))+0.35*direction_return_alignment(row.get("Direction","NEUTRAL"),row.get("Expected_Return",0))+0.05*float(row.get("ReliabilityScore",50))+0.10*horizon_alignment(row)+0.10*float(row.get("UncertaintyScore",50)))
 
-
 def calculate_score(row,regime):
     return clamp(0.16*float(row.get("TechnicalScore",50))+0.14*expected_return_score(row.get("Expected_Return",0))+0.14*float(row.get("Confidence",50))+0.11*float(row.get("Direction_Confidence",50))+0.07*float(row.get("ReliabilityScore",50))+0.09*regime_direction_score(row.get("Direction","NEUTRAL"),regime)+0.09*float(row.get("SectorScore",50))+0.10*multi_horizon_score(row.get("MultiHorizonExpectedReturn",0))+0.10*float(row.get("UncertaintyScore",50)))
-
 
 def score_candidates(candidates,regime="SIDEWAYS"):
     if candidates is None or candidates.empty: return pd.DataFrame()
@@ -71,9 +63,8 @@ def score_candidates(candidates,regime="SIDEWAYS"):
     df["Score"]=df.apply(lambda r:calculate_score(r,regime),axis=1)
     return df.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence","SectorScore"],ascending=False).reset_index(drop=True)
 
-
-def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=5,bucket_only=False):
-    """Select qualified stocks, allowing up to five from each configured price bucket."""
+def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False):
+    """Return every qualified stock, grouped by price bucket; no global five-stock cap."""
     scored=score_candidates(candidates,regime)
     if scored.empty: return scored
     qualified=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=35.0)].copy()
@@ -81,9 +72,9 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     if qualified.empty: return qualified.reset_index(drop=True)
     pieces=[]
     for bucket,group in qualified.groupby("PriceBucket",sort=False):
-        limit=min(5,max_per_bucket)
+        limit=len(group) if max_per_bucket is None or max_per_bucket<=0 else min(len(group),int(max_per_bucket))
         pieces.append(group.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False).head(limit))
     selected=pd.concat(pieces,ignore_index=True) if pieces else qualified.iloc[0:0]
-    if bucket_only:
-        return selected.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
-    return selected.sort_values(["TradeConfidence","Score"],ascending=False).head(top_n).reset_index(drop=True)
+    if bucket_only:return selected.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
+    if top_n is None or int(top_n)<=0:return selected.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
+    return selected.sort_values(["TradeConfidence","Score"],ascending=False).head(int(top_n)).reset_index(drop=True)
