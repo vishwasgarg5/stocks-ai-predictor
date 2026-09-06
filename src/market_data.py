@@ -36,13 +36,12 @@ def download_nse_equity_list():
 def load_universe():
     symbols=download_nse_equity_list()
     if symbols:
-        if MAX_UNIVERSE and MAX_UNIVERSE>0:symbols=symbols[:int(MAX_UNIVERSE)]
-        print(f"Using broad NSE equity universe: {len(symbols)} stocks")
+        # Never truncate the NSE list before market-data quality/liquidity filtering.
+        print(f"Using full NSE equity universe: {len(symbols)} stocks")
         return symbols
     for path in [Path(p) for p in UNIVERSE_FILES]:
         symbols=read_symbols_from_csv(path) if path.exists() else []
         if symbols:
-            if MAX_UNIVERSE and MAX_UNIVERSE>0:symbols=symbols[:int(MAX_UNIVERSE)]
             print(f"Using repository universe fallback: {len(symbols)} stocks");return symbols
     for module_name in ["src.nifty150_symbols","src.nifty150","src.market_universe"]:
         try:
@@ -51,7 +50,6 @@ def load_universe():
                 values=getattr(module,attr,None)
                 if values:
                     symbols=[normalize_symbol(x) for x in values]
-                    if MAX_UNIVERSE and MAX_UNIVERSE>0:symbols=symbols[:int(MAX_UNIVERSE)]
                     return symbols
         except Exception:continue
     raise RuntimeError("Unable to load NSE stock universe")
@@ -81,6 +79,12 @@ def liquidity_score(df):
     return float(min(np.log10(max(avg_value,1))*8,100))
 
 def filter_liquid_universe(data_map):return {s:df for s,df in data_map.items() if liquidity_score(df)>0}
+
+def apply_universe_cap(data_map):
+    """Apply any optional cap only after data-quality/liquidity screening, ordered by liquidity."""
+    if not MAX_UNIVERSE or MAX_UNIVERSE<=0:return data_map
+    ranked=sorted(data_map.items(),key=lambda item:liquidity_score(item[1]),reverse=True)
+    return dict(ranked[:int(MAX_UNIVERSE)])
 
 def get_nifty_data(period="1y",symbol=None):
     try:return clean_ohlcv(yf.download(symbol or NIFTY_SYMBOL,period=period,interval="1d",auto_adjust=False,progress=False,threads=False))
@@ -129,7 +133,7 @@ def get_previous_session_date(session_date):
     dates=sorted({pd.Timestamp(x).date() for x in df.index});previous=[x for x in dates if x<session_date];return max(previous) if previous else None
 
 def get_market_regime(cutoff_date=None):
-    df=get_nifty_data("1y")
+    df=get_nifty_data("4mo")
     if df.empty:return {"name":"UNKNOWN","score":50}
     if cutoff_date is not None:df=df[df.index.date<=cutoff_date]
     if len(df)<60:return {"name":"NORMAL","score":50}
