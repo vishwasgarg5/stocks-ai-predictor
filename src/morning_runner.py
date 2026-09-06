@@ -56,14 +56,11 @@ def _benchmark_return(benchmark_history):
     return float((close.iloc[-1]/close.iloc[-6]-1)*100) if len(close)>=6 else float((close.iloc[-1]/close.iloc[-2]-1)*100)
 
 def _attach_benchmarks_and_risk(candidates,data_map,cutoff_date,benchmark_history=None):
-    out=candidates.copy();vol_bucket=[];vol_pct=[]
-    benchmark_return=_benchmark_return(benchmark_history)
+    out=candidates.copy();vol_bucket=[];vol_pct=[];benchmark_return=_benchmark_return(benchmark_history)
     for _,r in out.iterrows():
         df=data_map.get(r["Symbol"])
         if df is None or df.empty:vol_bucket.append("UNKNOWN");vol_pct.append(np.nan);continue
-        valid=df[df.index<=pd.Timestamp(cutoff_date)].copy();close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100
-        v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan
-        vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")))
+        valid=df[df.index<=pd.Timestamp(cutoff_date)].copy();close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100;v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan;vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")))
     out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=benchmark_return;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-benchmark_return
     rank_col="FinalScore" if "FinalScore" in out.columns else "Score";out["CrossSectionRank"]=out.groupby("PriceBucket")[rank_col].rank(ascending=False,method="min");out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count");out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100
     if "SectorReturn20D" in out.columns:
@@ -84,10 +81,14 @@ def _attach_current_ohlcv(selected,data_map,cutoff_date):
 
 def _portfolio_payload():
     try:
-        df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[];s["Available"]=not df.empty
+        df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[];s["SellAlerts"]=[];s["AveragePlans"]=[]
         if not df.empty:
-            for _,r in df.sort_values("PnL").head(8).iterrows():
-                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=str(r.get("Recommended_Qty",0));newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";pa=str(r.get("Averaging_Action","-"));s["Rows"].append(f"{r.Stock}: CMP {price} | Avg {avg} | AI {target} | {ret} | {pa} {rec if pa=='AVERAGE' else ''} | NewAvg {newavg}")
+            for _,r in df.sort_values("PnL").iterrows():
+                price="-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}";ret="-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%";avg="-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}";target="-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}";rec=int(r.get("Recommended_Qty",0) or 0);newavg="-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}";decision=str(r.get("Decision","-"));sell_window=str(r.get("Sell_Window","-"));profit_target="-" if pd.isna(r.get("Profit_Target_Price")) else f"₹{float(r.Profit_Target_Price):,.2f}"
+                item={"Stock":r.Stock,"Quantity":int(r.Quantity),"Average_Price":avg,"Current_Price":price,"Return_Pct":ret,"AI_Target":target,"Decision":decision,"Sell_Window":sell_window,"Profit_Target":profit_target,"Recommended_Qty":rec,"New_Average_Price":newavg,"Reason":str(r.get("Sell_Reason","-"))}
+                s["Rows"].append(item)
+                if decision.startswith("SELL") or decision=="SELL / PROFIT BOOK":s["SellAlerts"].append(item)
+                if decision=="AVG":s["AveragePlans"].append(item)
         else:s["Rows"].append("Portfolio data unavailable")
         return s
     except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{},"Rows":["Portfolio data unavailable"],"Available":False}
