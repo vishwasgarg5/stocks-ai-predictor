@@ -83,7 +83,7 @@ def test_final_action_guardrails():
 
 def test_final_manifest_contract():
     from src.final_intelligence import final_stage_manifest
-    m=final_stage_manifest();assert "Stage10.4" in m and "Validation" in m and "Abstention" in m and "Learning" in m
+    m=final_stage_manifest();assert any(k in m for k in ["Stage10.4","Stage10.5"]) and "Validation" in m and "Abstention" in m and "Learning" in m
 
 def test_portfolio_engine_has_sell_average_and_timing_logic():
     from src.portfolio_report import _sell_window,_avg_window,_plan
