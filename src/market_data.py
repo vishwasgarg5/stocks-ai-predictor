@@ -25,27 +25,40 @@ def download_nse_equity_list():
         if r.status_code!=200:return []
         from io import StringIO
         df=pd.read_csv(StringIO(r.text)); column=next((c for c in ["SYMBOL","Symbol","symbol"] if c in df.columns),None)
-        return list(dict.fromkeys(normalize_symbol(x) for x in df[column].dropna())) if column else []
+        if column is None:return []
+        symbols=[]
+        for x in df[column].dropna():
+            s=normalize_symbol(x)
+            if s and s!="SYMBOL" and s not in symbols:symbols.append(s)
+        return symbols
     except Exception as exc:print(f"NSE universe download failed: {exc}");return []
 
 def load_universe():
     symbols=download_nse_equity_list()
-    if symbols:print(f"Using broad NSE universe: {len(symbols)} stocks");return symbols[:MAX_UNIVERSE]
+    if symbols:
+        if MAX_UNIVERSE and MAX_UNIVERSE>0:symbols=symbols[:int(MAX_UNIVERSE)]
+        print(f"Using broad NSE equity universe: {len(symbols)} stocks")
+        return symbols
     for path in [Path(p) for p in UNIVERSE_FILES]:
         symbols=read_symbols_from_csv(path) if path.exists() else []
-        if symbols:print(f"Using repository universe fallback: {len(symbols)} stocks");return symbols[:MAX_UNIVERSE]
+        if symbols:
+            if MAX_UNIVERSE and MAX_UNIVERSE>0:symbols=symbols[:int(MAX_UNIVERSE)]
+            print(f"Using repository universe fallback: {len(symbols)} stocks");return symbols
     for module_name in ["src.nifty150_symbols","src.nifty150","src.market_universe"]:
         try:
             module=importlib.import_module(module_name)
             for attr in ["NIFTY150_SYMBOLS","NIFTY_150_SYMBOLS","SYMBOLS","STOCKS"]:
                 values=getattr(module,attr,None)
-                if values:return [normalize_symbol(x) for x in list(values)[:MAX_UNIVERSE]]
+                if values:
+                    symbols=[normalize_symbol(x) for x in values]
+                    if MAX_UNIVERSE and MAX_UNIVERSE>0:symbols=symbols[:int(MAX_UNIVERSE)]
+                    return symbols
         except Exception:continue
     raise RuntimeError("Unable to load NSE stock universe")
 
 def download_symbol(symbol,period=HISTORY_PERIOD):
     try:
-        df=yf.download(f"{normalize_symbol(symbol)}.NS",period=period,interval="1d",auto_adjust=False,progress=False,threads=False); df=clean_ohlcv(df)
+        df=yf.download(f"{normalize_symbol(symbol)}.NS",period=period,interval="1d",auto_adjust=False,progress=False,threads=False);df=clean_ohlcv(df)
         return df if len(df)>=30 else None
     except Exception as exc:print(f"{symbol}: data download failed: {exc}");return None
 
@@ -75,28 +88,21 @@ def get_nifty_data(period="1y",symbol=None):
 
 def _index_snapshot(symbol,period="3mo",cutoff=None):
     df=get_nifty_data(period,symbol)
-    if cutoff is not None and not df.empty: df=df[df.index.date<=pd.Timestamp(cutoff).date()]
+    if cutoff is not None and not df.empty:df=df[df.index.date<=pd.Timestamp(cutoff).date()]
     if df.empty:return {"Close":np.nan,"Change1D":np.nan}
-    close=float(df["Close"].iloc[-1]); prev=float(df["Close"].iloc[-2]) if len(df)>1 else close
+    close=float(df["Close"].iloc[-1]);prev=float(df["Close"].iloc[-2]) if len(df)>1 else close
     return {"Close":close,"Change1D":(close/prev-1)*100 if prev else 0.0}
 
 def get_market_snapshot(data_map=None,cutoff=None):
-    snap={
-        "NIFTY":_index_snapshot(NIFTY_SYMBOL,cutoff=cutoff),
-        "BANKNIFTY":_index_snapshot(BANKNIFTY_SYMBOL,cutoff=cutoff),
-        "FINNIFTY":_index_snapshot(FINNIFTY_SYMBOL,cutoff=cutoff),
-        "MIDCPNIFTY":_index_snapshot(MIDCPNIFTY_SYMBOL,cutoff=cutoff),
-        "VIX":_index_snapshot(VIX_SYMBOL,cutoff=cutoff),
-    }
+    snap={"NIFTY":_index_snapshot(NIFTY_SYMBOL,cutoff=cutoff),"BANKNIFTY":_index_snapshot(BANKNIFTY_SYMBOL,cutoff=cutoff),"FINNIFTY":_index_snapshot(FINNIFTY_SYMBOL,cutoff=cutoff),"MIDCPNIFTY":_index_snapshot(MIDCPNIFTY_SYMBOL,cutoff=cutoff),"VIX":_index_snapshot(VIX_SYMBOL,cutoff=cutoff)}
     if data_map:
-        ups=downs=0
-        cutoff_date=pd.Timestamp(cutoff).date() if cutoff is not None else None
+        ups=downs=0;cutoff_date=pd.Timestamp(cutoff).date() if cutoff is not None else None
         for df in data_map.values():
             if df is None or len(df)<2:continue
-            if cutoff_date is not None: df=df[df.index.date<=cutoff_date]
+            if cutoff_date is not None:df=df[df.index.date<=cutoff_date]
             if len(df)<2:continue
-            a,b=float(df["Close"].iloc[-2]),float(df["Close"].iloc[-1]); ups+=b>a; downs+=b<a
-        total=ups+downs; snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1) if total else 50}
+            a,b=float(df["Close"].iloc[-2]),float(df["Close"].iloc[-1]);ups+=b>a;downs+=b<a
+        total=ups+downs;snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1) if total else 50}
     else:snap["Breadth"]={"Advancers":0,"Decliners":0,"Ratio":0,"Score":50}
     return snap
 
@@ -104,9 +110,7 @@ def get_completed_session_date(mode="morning",reference_date=None):
     df=get_nifty_data("1mo")
     if df.empty:return None
     from .utils import today_ist
-    reference=reference_date or today_ist();dates=sorted({pd.Timestamp(x).date() for x in df.index})
-    valid=[x for x in dates if x<reference] if mode=="morning" else [x for x in dates if x<=reference]
-    return max(valid) if valid else None
+    reference=reference_date or today_ist();dates=sorted({pd.Timestamp(x).date() for x in df.index});valid=[x for x in dates if x<reference] if mode=="morning" else [x for x in dates if x<=reference];return max(valid) if valid else None
 
 def get_data_cutoff_date(data_map,reference_date=None,fallback=None,min_fraction=0.50):
     from .utils import today_ist
@@ -143,5 +147,4 @@ def get_row_for_date(df,target_date):
 
 def get_previous_row(df,target_date):
     if df is None or df.empty:return None
-    target_date=pd.Timestamp(target_date).date();rows=[(i,r) for i,r in df.iterrows() if pd.Timestamp(i).date()<target_date]
-    return rows[-1][1] if rows else None
+    target_date=pd.Timestamp(target_date).date();rows=[(i,r) for i,r in df.iterrows() if pd.Timestamp(i).date()<target_date];return rows[-1][1] if rows else None
