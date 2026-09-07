@@ -9,6 +9,7 @@ from .prediction import train_stock_bundle, predict_stock, add_multihorizon_pred
 from .market_data import download_symbol
 from .portfolio_long_horizon import train_portfolio_long_horizon_models, predict_portfolio_long_horizons, PORTFOLIO_LONG_HORIZONS
 from .quality_controls import confirm_portfolio_target
+from .utils import is_nse_trading_day, next_nse_trading_day
 ROOT=Path(__file__).resolve().parents[1]
 PORTFOLIO_FILE=ROOT/"portfolio_manager"/"data"/"my_portfolio.csv"
 NAME_TO_TICKER={"RELIANCE INDUSTRIES":"RELIANCE.NS","RELIANCE":"RELIANCE.NS","VEDANTA IRON & STEEL":"VEDL.NS","VEDANTA":"VEDL.NS","YES BANK":"YESBANK.NS","IRFC":"IRFC.NS","NTPC":"NTPC.NS","TATA POWER":"TATAPOWER.NS","WIPRO":"WIPRO.NS","PALASH SECURITIES":"PALASHSECU.NS","OLA ELECTRIC MOBILITY":"OLAELEC.NS","STAR CEMENT":"STARCEMENT.NS","SJVN":"SJVN.NS","RELIANCE POWER":"RPOWER.NS","IRCTC":"IRCTC.NS","SEPC":"SEPC.NS","INDIAN RENEWABLE ENERGY":"IREDA.NS","IREDA":"IREDA.NS"}
@@ -18,7 +19,7 @@ MIN_AI_CONFIDENCE=60.0
 SELL_RISK_GAP_PCT=3.0
 SHORT_HORIZONS=(1,3,5,7,20)
 HORIZONS=SHORT_HORIZONS+PORTFOLIO_LONG_HORIZONS
-NSE_HOLIDAYS={"2026-01-15","2026-01-26","2026-02-19","2026-03-03","2026-03-19","2026-03-26","2026-03-31","2026-04-01","2026-04-03","2026-04-14","2026-05-01","2026-05-28","2026-06-26","2026-08-26","2026-09-14","2026-10-02","2026-10-20","2026-11-08","2026-11-10","2026-11-24","2026-12-25"}
+
 def _ticker(value):
     raw=str(value).strip();key=re.sub(r"\s+"," ",raw.upper())
     if key in NAME_TO_TICKER:return NAME_TO_TICKER[key]
@@ -80,15 +81,12 @@ def _attach_predictions(df):
     for c in ["AI_Target","AI_Open","AI_High","AI_Low",*[f"Horizon_{h}D" for h in SHORT_HORIZONS]]:
         if c in p:p[c]=pd.to_numeric(p[c],errors="coerce")
     merged=df.merge(p,on="Ticker",how="left");return _portfolio_ai_predictions(merged,pred_date),pred_date
-def _is_nse_trading_day(date):
-    ts=pd.Timestamp(date);return ts.weekday()<5 and str(ts.date()) not in NSE_HOLIDAYS
+def _is_nse_trading_day(date):return is_nse_trading_day(date)
 def _next_trading_date(start_date,sessions):
     if not start_date:return "-"
-    d=pd.Timestamp(start_date);count=0
-    while count<int(sessions):
-        d+=pd.Timedelta(days=1)
-        if _is_nse_trading_day(d):count+=1
-    return str(d.date())
+    d=pd.Timestamp(start_date).date()
+    for _ in range(int(sessions)):d=next_nse_trading_day(d)
+    return str(d)
 def _confirmed_target(row):
     forecasts={}
     for h in (60,90,180,365):
@@ -106,8 +104,7 @@ def _sell_plan(row,current,avg,prediction_date):
             value=float(row.get(f"Horizon_{h}D"))
             if np.isfinite(value):forecasts.append((h,value))
         except (TypeError,ValueError):pass
-    confirmed_target,policy=_confirmed_target(row)
-    row["Portfolio_Target_Pct"]=confirmed_target;row["Portfolio_Target_Status"]=policy["Status"];row["Portfolio_Target_Horizons"]=",".join(map(str,policy.get("ConfirmedHorizons",[]))) or "-"
+    confirmed_target,policy=_confirmed_target(row);row["Portfolio_Target_Pct"]=confirmed_target;row["Portfolio_Target_Status"]=policy["Status"];row["Portfolio_Target_Horizons"]=",".join(map(str,policy.get("ConfirmedHorizons",[]))) or "-"
     if not forecasts:return confirmed_target,float(avg)*(1+confirmed_target/100),"NO HORIZON EVIDENCE","-","WAIT"
     reliable=[(h,v) for h,v in forecasts if v>=confirmed_target and confidence>=MIN_AI_CONFIDENCE]
     if reliable:target_h,target_return=max(reliable,key=lambda x:x[1])
