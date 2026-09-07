@@ -84,16 +84,35 @@ def _next_trading_date(start_date,days):
         d+=pd.Timedelta(days=1)
         if d.weekday()<5:count+=1
     return str(d.date())
-def _sell_window(row,target_price,current,prediction_date):
-    if current is None or pd.isna(current) or not prediction_date or pd.isna(target_price):return "NO AI DATA"
+def _sell_plan(row,current,avg,prediction_date):
+    """10% is the minimum target; use the highest reliable AI horizon above 10% when available."""
+    if current is None or pd.isna(current) or pd.isna(avg) or not prediction_date:
+        return TARGET_PROFIT_PCT,None,"NO AI DATA","-"
+    forecasts=[]
     for h in HORIZONS:
-        expected=row.get(f"Horizon_{h}D")
-        if pd.isna(expected):continue
-        if float(current)*(1+float(expected)/100)>=float(target_price):
-            date=_next_trading_date(prediction_date,h)
-            if h<=1:return f"1D ({date})"
-            start=_next_trading_date(prediction_date,max(1,h-2));return f"{h}D ({start}→{date})"
-    available=[h for h in HORIZONS if pd.notna(row.get(f"Horizon_{h}D"))];return f">{max(available)}D" if available else "NO AI DATA"
+        value=row.get(f"Horizon_{h}D")
+        try:
+            value=float(value)
+            if np.isfinite(value):forecasts.append((h,value))
+        except (TypeError,ValueError):
+            continue
+    if not forecasts:return TARGET_PROFIT_PCT,float(avg)*(1+TARGET_PROFIT_PCT/100),"NO AI DATA","-"
+    best_h,best_return=max(forecasts,key=lambda x:x[1])
+    target_return=max(TARGET_PROFIT_PCT,best_return)
+    if best_return<=TARGET_PROFIT_PCT:
+        target_h=None
+        for h,value in forecasts:
+            if value>=TARGET_PROFIT_PCT:
+                target_h=h;break
+    else:
+        target_h=best_h
+    target_price=float(avg)*(1+target_return/100)
+    if target_h is None:
+        return target_return,target_price,f">{max(h for h,_ in forecasts)}D","-"
+    date=_next_trading_date(prediction_date,int(target_h))
+    if target_h<=1:window=f"1D ({date})"
+    else:window=f"{target_h}D ({_next_trading_date(prediction_date,max(1,int(target_h)-2))}→{date})"
+    return target_return,target_price,window,date
 def _average_plan(row):
     qty=float(row["Quantity"] or 0);price=row["Current_Price"];avg=row["Average_Price"];target=row.get("AI_Target")
     if pd.isna(avg) and price is not None and pd.notna(row["Reported_Return"]) and float(row["Reported_Return"])>-100:avg=price/(1+float(row["Reported_Return"])/100);row["Average_Price"]=avg;row["AveragePriceSource"]="ESTIMATED_FROM_RETURN"
@@ -106,8 +125,9 @@ def _average_plan(row):
     row["Invested_Value"]=qty*float(avg);row["Recovery_Gap_Pct"]=(float(avg)-price)/float(avg)*100 if avg else None
     if pd.isna(target):
         row["Target_Return_Pct"]=None;row["Recommended_Qty"]=0;row["New_Average_Price"]=float(avg);row["Projected_Return_At_AI_Target"]=None;row["Averaging_Action"]="DO NOT AVG";row["Decision"]="HOLD";row["Sell_Window"]="NO AI DATA";row["Sell_Reason"]="AI forecast unavailable for this holding";return row
-    target=float(target);row["Target_Return_Pct"]=(target/float(avg)-1)*100;conf=float(row.get("AI_Confidence",row.get("CalibratedConfidence",row.get("Confidence",0))) or 0);profit_target=float(row["Profit_Target_Price"]);row["Sell_Window"]=_sell_window(row,profit_target,price,row.get("PredictionDate"))
-    if price>=profit_target:row["Recommended_Qty"]=0;row["New_Average_Price"]=float(avg);row["Projected_Return_At_AI_Target"]=(target/avg-1)*100;row["Averaging_Action"]="DO NOT AVG";row["Decision"]="SELL / PROFIT BOOK";row["Sell_Window"]="NOW";row["Sell_Reason"]=f"{TARGET_PROFIT_PCT:.0f}% portfolio profit target reached";return row
+    target=float(target);row["Target_Return_Pct"]=(target/float(avg)-1)*100;conf=float(row.get("AI_Confidence",row.get("CalibratedConfidence",row.get("Confidence",0))) or 0);target_return,target_price,sell_window,sell_date=_sell_plan(row,price,float(avg),row.get("PredictionDate"));row["Sell_Target_Profit_Pct"]=target_return;row["Sell_Target_Price"]=target_price;row["Sell_Date"]=sell_date;row["Sell_Window"]=sell_window;profit_target=float(target_price or row["Profit_Target_Price"])
+    if price>=profit_target:
+        row["Recommended_Qty"]=0;row["New_Average_Price"]=float(avg);row["Projected_Return_At_AI_Target"]=(target/avg-1)*100;row["Averaging_Action"]="DO NOT AVG";row["Decision"]="SELL / PROFIT BOOK";row["Sell_Window"]="NOW";row["Sell_Date"]=str(row.get("PredictionDate") or "TODAY");row["Sell_Reason"]=f"Minimum {TARGET_PROFIT_PCT:.0f}% target reached; dynamic AI target {target_return:.1f}%";return row
     desired_avg=target/(1+TARGET_PROFIT_PCT/100)
     if desired_avg<=price or target<=price*(1-SELL_RISK_GAP_PCT/100):row["Recommended_Qty"]=0;row["New_Average_Price"]=float(avg);row["Projected_Return_At_AI_Target"]=(target/avg-1)*100;row["Averaging_Action"]="DO NOT AVG";row["Decision"]="SELL / EXIT" if target<price*(1-SELL_RISK_GAP_PCT/100) else "HOLD";row["Sell_Window"]="NOW" if target<price*(1-SELL_RISK_GAP_PCT/100) else row["Sell_Window"];row["Sell_Reason"]="AI target does not support a safe 10% recovery";return row
     required=qty*(float(avg)-desired_avg)/(desired_avg-price);budget=qty*float(avg)*MAX_AVERAGING_CAPITAL_PCT/100;max_qty=int(budget//price);rec=min(max(0,int(required+0.9999)),max_qty);new_avg=(qty*float(avg)+rec*price)/(qty+rec) if rec>0 else float(avg);projected=(target/new_avg-1)*100
