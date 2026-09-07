@@ -1,9 +1,9 @@
-"""Stage 10.4 morning pipeline: prediction, ranking, probability, risk and abstention."""
+"""Stage 10.5 morning pipeline: top-10 prediction and multi-horizon intelligence."""
 import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from .config import PRESCREEN_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,STAGE_NAME,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,VOLATILITY_LOW_PCT,VOLATILITY_HIGH_PCT,NIFTY_SYMBOL
+from .config import PRESCREEN_N,PREDICTION_TOP_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,STAGE_NAME,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,VOLATILITY_LOW_PCT,VOLATILITY_HIGH_PCT,NIFTY_SYMBOL
 from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime,get_market_snapshot,get_nifty_data
 from .features import technical_score
 from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
@@ -124,16 +124,22 @@ def run():
     for symbol,df in data_map.items():
         try:scored.append((symbol,technical_score(df[df.index<=pd.Timestamp(cutoff_date)])))
         except Exception:pass
-    scored.sort(key=lambda x:x[1],reverse=True);candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]];candidate_rows=[]
-    for symbol in candidate_symbols:
-        try:bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);bundles[symbol]=bundle;result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date)})
+    scored.sort(key=lambda x:x[1],reverse=True)
+    prediction_symbols=[x[0] for x in scored[:PREDICTION_TOP_N]]
+    candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]]
+    if len(prediction_symbols)<PREDICTION_TOP_N:print(f"Only {len(prediction_symbols)} stocks passed scoring for prediction.")
+    candidate_rows=[]
+    for symbol in prediction_symbols:
+        try:bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);bundles[symbol]=bundle;result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date),"PreModelScore":dict(scored).get(symbol,0.0)})
         except Exception as exc:print(f"{symbol}: prediction failed: {exc}")
     if not candidate_rows:raise RuntimeError("Unable to generate predictions.")
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
-    candidates=score_candidates(candidates,regime);bucket_pool=_bucket_candidates(candidates,MAX_PER_PRICE_BUCKET).reset_index(drop=True);bucket_pool=_attach_horizons(bucket_pool,data_map,cutoff_date);bucket_pool=add_prediction_uncertainty(bucket_pool,data_map,bundles);bucket_pool=score_candidates(bucket_pool,regime);bucket_pool=add_market_risk(bucket_pool,regime);bucket_pool=_attach_benchmarks_and_risk(bucket_pool,data_map,cutoff_date,benchmark_history)
-    selected=select_top_stocks(bucket_pool,top_n=None,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
-    metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"BenchmarkSymbol":NIFTY_SYMBOL,"BenchmarkExpectedReturn5D":_benchmark_return(benchmark_history),"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":"ALL_QUALIFIED","MaxSelectedStocks":len(selected),"GlobalTopNCap":False,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"AI":len(candidate_symbols),"LiquidStocks":len(data_map)}
+    candidates=score_candidates(candidates,regime)
+    prediction_pool=_attach_horizons(candidates,data_map,cutoff_date)
+    prediction_pool=add_prediction_uncertainty(prediction_pool,data_map,bundles);prediction_pool=score_candidates(prediction_pool,regime);prediction_pool=add_market_risk(prediction_pool,regime);prediction_pool=_attach_benchmarks_and_risk(prediction_pool,data_map,cutoff_date,benchmark_history)
+    selected=select_top_stocks(prediction_pool,top_n=PREDICTION_TOP_N,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
+    metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"BenchmarkSymbol":NIFTY_SYMBOL,"BenchmarkExpectedReturn5D":_benchmark_return(benchmark_history),"PriceBuckets":[">1000","500-999","100-499","50-99","10-49"],"BestPerPriceBucket":"ALL_QUALIFIED","MaxSelectedStocks":PREDICTION_TOP_N,"GlobalTopNCap":True,"MultiHorizonTopN":PREDICTION_TOP_N,"MultiHorizons":[1,3,5,7,20],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"PreScreen":len(candidate_symbols),"AI":len(prediction_symbols),"LiquidStocks":len(data_map)}
     save_predictions(selected,prediction_date,metadata);save_decisions(selected,prediction_date);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","VolatilityBucket","VolatilityPct","CrossSectionPercentile","SectorRelative20D","BenchmarkEdgePct","RiskAdjustedReturn","FinalDecisionScore","Action","FinalRisk","CalibratedConfidence","PredictionUncertaintyPct","TargetHitProb_3_0Pct","DownsideHitProb_2Pct"] if c in selected.columns]].to_dict("records")})
     jump_data={s:data_map[s] for s in candidate_symbols[:JUMP_CANDIDATE_N] if s in data_map};jump_watchlist=generate_jump_watchlist(jump_data,cutoff_date,variant)
     if not jump_watchlist.empty:save_jump_predictions(jump_watchlist,prediction_date)
@@ -141,7 +147,7 @@ def run():
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=get_ipo_report();ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
-    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(candidate_symbols),"Selected":len(selected)};report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());sent=send_telegram(report)
+    accuracy=model_report_metrics();scan={"Universe":len(universe),"Data":len(raw_data),"Liquid":len(data_map),"AI":len(prediction_symbols),"PreScreen":len(candidate_symbols),"Selected":len(selected)};report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,market_snapshot=snapshot,regime=regime,ipo=ipo,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload());sent=send_telegram(report)
     if sent:mark_morning_report_sent(prediction_date)
     print(report)
 
