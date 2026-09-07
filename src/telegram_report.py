@@ -130,8 +130,13 @@ def _best_pick_table(selected):
     return ["🏆 *BEST PICK — 1 PER PRICE BUCKET*",*_table(["Bucket","Stock","CMP","Exp","Score","Action"],rows)]
 def _prediction_table(selected):
     if selected is None or selected.empty:return []
-    rows=[[str(r.get("Symbol","-")),_fmt(r.get("Pred_Open")),_fmt(r.get("Pred_High")),_fmt(r.get("Pred_Low")),_fmt(r.get("Pred_Close")),_pct(r.get("Expected_Return"))] for _,r in selected.iterrows()]
-    return ["📈 *PREDICTED OHLC*"]+_table(["Stock","Open","High","Low","Close","Exp"],rows)
+    # Prediction engine may evaluate Top-10, but the Telegram OHLC section is intentionally one best overall pick.
+    g=_sort(selected)
+    r=g.iloc[0]
+    try:cmp=float(r.get("Current_Price",r.get("Current_Close",0)) or 0)
+    except (TypeError,ValueError):cmp=0
+    rows=[[str(r.get("Symbol","-")),_fmt(r.get("Pred_Open")),_fmt(r.get("Pred_High")),_fmt(r.get("Pred_Low")),_fmt(r.get("Pred_Close")),_pct(r.get("Expected_Return"))]]
+    return ["📈 *PREDICTED OHLC — BEST PICK*"]+_table(["Stock","Open","High","Low","Close","Exp"],rows)
 def _horizon_table(selected):
     if selected is None or selected.empty:return []
     rows=[[str(r.get("Symbol","-"))]+[_pct(r.get(f"Horizon_{h}D")) for h in (1,3,5,7,20)] for _,r in selected.iterrows()];return ["🔮 *MULTI-HORIZON OUTLOOK*"]+_table(["Stock","1D","3D","5D","7D","20D"],rows)
