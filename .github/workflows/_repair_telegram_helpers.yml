@@ -1,0 +1,45 @@
+name: Repair Telegram Report Helpers
+
+on:
+  push:
+    paths:
+      - '.github/workflows/_repair_telegram_helpers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Add missing report helpers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/telegram_report.py')
+          s = p.read_text()
+          marker = '\ndef _table(headers, rows, max_width=12):\n'
+          helpers = '''\n\ndef _num(v, default=None):\n    try:\n        x = float(v)\n        return default if not pd.notna(x) else x\n    except (TypeError, ValueError):\n        return default\n\n\ndef _decision(v):\n    """Compact portfolio/report decision for Telegram mobile display."""\n    s = str(v or "-").strip().upper()\n    if s in {"SELL / PROFIT BOOK", "SELL / EXIT", "SELL", "PROFIT BOOK", "EXIT"} or s.startswith("SELL"):\n        return "SELL"\n    if s in {"HOLD / RECOVERY", "HOLD", "RECOVERY"} or s.startswith("HOLD"):\n        return "HOLD"\n    if s in {"DATA WAIT", "WAIT"} or s.startswith("DATA WAIT"):\n        return "WAIT"\n    if s in {"AVG", "AVERAGE", "AVERAGING"} or s.startswith("AVG"):\n        return "AVG"\n    if s in {"BUY", "ADD"} or s.startswith("BUY"):\n        return "BUY"\n    return s if s else "-"\n'''
+          if 'def _decision(' not in s:
+              if marker not in s:
+                  raise SystemExit('Insertion marker not found')
+              s = s.replace(marker, helpers + marker, 1)
+          p.write_text(s)
+          PY
+          python -m py_compile src/telegram_report.py
+      - name: Commit and remove repair workflow
+        run: |
+          git config user.name 'stocks-ai-predictor'
+          git config user.email 'actions@github.com'
+          git add src/telegram_report.py .github/workflows/_repair_telegram_helpers.yml
+          git commit -m 'Fix Telegram report helper functions' || exit 0
+          git rm .github/workflows/_repair_telegram_helpers.yml
+          git commit -m 'Remove temporary Telegram repair workflow'
+          git push origin main
