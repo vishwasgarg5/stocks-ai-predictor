@@ -39,6 +39,12 @@ def _table(headers,rows):
     for row in rows:lines.append("| "+" | ".join(str(x).replace("|","/") for x in row)+" |")
     return lines
 
+def _ordered_price_buckets(values):
+    """Return price buckets in fixed low-to-high order, independent of DataFrame order."""
+    configured=list(PRICE_BUCKET_NAMES)
+    present=[] if values is None else [str(x) for x in pd.Series(values).dropna().unique()]
+    return configured+[x for x in present if x not in configured]
+
 def _market(snapshot,regime):
     snapshot=snapshot or {};n=snapshot.get("NIFTY",{});b=snapshot.get("BANKNIFTY",{});f=snapshot.get("FINNIFTY",{});m=snapshot.get("MIDCPNIFTY",{});v=snapshot.get("VIX",{});br=snapshot.get("Breadth",{})
     rows=[["NIFTY",_fmt(n.get("Close")),_pct(n.get("Change1D"))],["BANKNIFTY",_fmt(b.get("Close")),_pct(b.get("Change1D"))],["FINNIFTY",_fmt(f.get("Close")),_pct(f.get("Change1D"))],["MIDCPNIFTY",_fmt(m.get("Close")),_pct(m.get("Change1D"))],["VIX",_fmt(v.get("Close")),"-"]]
@@ -53,23 +59,30 @@ def _stock_rows(group):
         rows.append([f"*{r.get('Symbol','-')}*",f"₹{_fmt(cmp)}",_pct(exp),_pct(r.get("Horizon_1D")),_pct(r.get("Horizon_5D")),_pct(r.get("Horizon_20D")),_fmt(score,0),str(r.get("Action","-"))])
     return rows
 
+def _bucket_sort(group):
+    score_cols=[c for c in ["FinalDecisionScore","TradeConfidence","Score"] if c in group.columns]
+    if score_cols:return group.sort_values(score_cols,ascending=[False]*len(score_cols),kind="mergesort")
+    return group.sort_values("Symbol",ascending=True,kind="mergesort")
+
 def _bucket_sections(selected,title="QUALIFIED STOCKS BY PRICE BUCKET"):
     if selected is None or selected.empty:return ["No qualifying stock today."]
-    lines=[f"🎯 *{title}*"];buckets=list(PRICE_BUCKET_NAMES)+[b for b in selected.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
-    for bucket in buckets:
-        if "PriceBucket" not in selected.columns:continue
+    lines=[f"🎯 *{title}*"]
+    if "PriceBucket" not in selected.columns:return lines+["No price bucket data."]
+    for bucket in _ordered_price_buckets(selected["PriceBucket"]):
         group=selected[selected["PriceBucket"].astype(str)==bucket].copy()
         if group.empty:continue
-        group=group.sort_values([c for c in ["FinalDecisionScore","TradeConfidence","Score"] if c in group.columns],ascending=False)
-        lines += [_BUCKET_MESSAGE,f"💎 *{bucket}*",*_table(["Stock","CMP","Exp%","1D","5D","20D","Score","Action"],_stock_rows(group)),""]
+        group=_bucket_sort(group).head(6)
+        lines += [_BUCKET_MESSAGE,f"💎 *₹ {bucket}*",*_table(["Stock","CMP","Exp%","1D","5D","20D","Score","Action"],_stock_rows(group)),""]
     return lines
 
 def _best_pick_table(selected):
-    if selected is None or selected.empty:return []
+    if selected is None or selected.empty or "PriceBucket" not in selected.columns:return []
     rows=[]
-    for bucket,group in selected.groupby("PriceBucket",sort=False):
-        g=group.sort_values([c for c in ["FinalDecisionScore","TradeConfidence","Score"] if c in group.columns],ascending=False).iloc[0]
-        rows.append([f"*{bucket}*",f"*{g.get('Symbol','-')}*",f"₹{_fmt(g.get('Current_Price',g.get('Current_Close')))}",_pct(g.get('Expected_Return')),f"{float(g.get('FinalDecisionScore',g.get('Score',0))):.0f}",str(g.get("Action","-")),f"{float(g.get('CalibratedConfidence',g.get('Confidence',0))):.0f}%"])
+    for bucket in _ordered_price_buckets(selected["PriceBucket"]):
+        group=selected[selected["PriceBucket"].astype(str)==bucket].copy()
+        if group.empty:continue
+        g=_bucket_sort(group).iloc[0]
+        rows.append([f"*₹ {bucket}*",f"*{g.get('Symbol','-')}*",f"₹{_fmt(g.get('Current_Price',g.get('Current_Close')))}",_pct(g.get('Expected_Return')),f"{float(g.get('FinalDecisionScore',g.get('Score',0))):.0f}",str(g.get("Action","-")),f"{float(g.get('CalibratedConfidence',g.get('Confidence',0))):.0f}%"])
     return ["🏆 *BEST PICK — ONE PER PRICE BUCKET*"]+_table(["Bucket","Stock","CMP","Exp%","Score","Action","Conf."],rows)
 
 def _prediction_table(selected):
@@ -89,8 +102,7 @@ def _portfolio(p):
     lines=["💼 *AI PORTFOLIO MANAGER*",f"Positions: {p.get('Positions',0)}  •  Value: ₹{p.get('Value',0):,.0f}  •  P&L: ₹{p.get('PnL',0):+,.0f} ({p.get('Return',0):+.2f}%)"]
     rows=[]
     for x in p.get("Rows",[]):
-        if isinstance(x,dict):
-            rows.append([x.get("Stock","-"),x.get("Quantity","-"),x.get("Decision","-"),x.get("Current_Price","-"),x.get("Average_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","-")])
+        if isinstance(x,dict):rows.append([x.get("Stock","-"),x.get("Quantity","-"),x.get("Decision","-"),x.get("Current_Price","-"),x.get("Average_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","-")])
         else:lines.append(f"• {x}")
     if rows:lines += ["📌 *DAILY PORTFOLIO ACTION*",*_table(["Stock","Qty","Decision","CMP","Avg","10% Target","Sell Window"],rows)]
     if p.get("AveragePlans"):
@@ -132,15 +144,15 @@ def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,
 
 def _evening_bucket_sections(evaluation):
     if evaluation is None or evaluation.empty:return ["No predictions available for evaluation."]
-    lines=["📋 *PREDICTION vs ACTUAL — BY PRICE BUCKET*"];buckets=list(PRICE_BUCKET_NAMES)+[b for b in evaluation.get("PriceBucket",pd.Series(dtype=str)).astype(str).unique() if b not in PRICE_BUCKET_NAMES]
-    for bucket in buckets:
-        if "PriceBucket" not in evaluation.columns:continue
+    lines=["📋 *PREDICTION vs ACTUAL — BY PRICE BUCKET*"]
+    if "PriceBucket" not in evaluation.columns:return lines+["No price bucket data."]
+    for bucket in _ordered_price_buckets(evaluation["PriceBucket"]):
         group=evaluation[evaluation["PriceBucket"].astype(str)==bucket].copy()
         if group.empty:continue
         rows=[]
-        for _,r in group.sort_values("APE_Close",key=lambda s:s.abs()).iterrows():
+        for _,r in group.sort_values("APE_Close",key=lambda s:s.abs(),kind="mergesort").head(6).iterrows():
             ok="✅" if bool(r.get("DirectionCorrect",False)) else "❌";rows.append([f"*{r.get('Symbol','-')}* {ok}",f"O {_fmt(r.get('Pred_Open'))}/ {_fmt(r.get('Actual_Open'))}",f"H {_fmt(r.get('Pred_High'))}/ {_fmt(r.get('Actual_High'))}",f"L {_fmt(r.get('Pred_Low'))}/ {_fmt(r.get('Actual_Low'))}",f"C {_fmt(r.get('Pred_Close'))}/ {_fmt(r.get('Actual_Close'))}",f"{abs(float(r.get('APE_Close',0) or 0)):.2f}%"])
-        lines += [_BUCKET_MESSAGE,f"💎 *{bucket}*",*_table(["Stock","Open P/A","High P/A","Low P/A","Close P/A","Close APE"],rows),""]
+        lines += [_BUCKET_MESSAGE,f"💎 *₹ {bucket}*",*_table(["Stock","Open P/A","High P/A","Low P/A","Close P/A","Close APE"],rows),""]
     return lines
 
 def _evening_accuracy_table(bucket):
