@@ -120,5 +120,7 @@ def portfolio_snapshot():
     df=load_portfolio()
     if df.empty:return df,{"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{}}
     prices={t:_price(t) for t in df["Ticker"].dropna().unique()};df["Current_Price"]=df["Ticker"].map(prices);df,prediction_date=_attach_predictions(df);df["PredictionDate"]=prediction_date;df["AveragePriceSource"]="UNAVAILABLE";df=df.apply(_average_plan,axis=1)
+    decision_map={"SELL / PROFIT BOOK":"SELL","SELL / EXIT":"SELL","HOLD / RECOVERY":"HOLD","DATA WAIT":"WAIT"}
+    df["Decision"]=df["Decision"].map(lambda x:decision_map.get(str(x),str(x).strip().split()[0] if str(x).strip() else "WAIT"))
     df["Current_Value"]=df["Quantity"]*df["Current_Price"].fillna(0);mask=df["Reported_PnL"].notna()&df["AveragePriceSource"].str.startswith("ESTIMATED");df["PnL"]=df["Current_Value"]-df["Invested_Value"];df.loc[mask,"PnL"]=df.loc[mask,"Reported_PnL"];df["Return_Pct"]=df.apply(lambda r:float(r["Reported_Return"]) if str(r["AveragePriceSource"]).startswith("ESTIMATED") and pd.notna(r["Reported_Return"]) else ((r["PnL"]/r["Invested_Value"]*100) if r["Invested_Value"] else None),axis=1)
     total_inv=float(df["Invested_Value"].sum());total_val=float(df["Current_Value"].sum());total_pnl=float(df["PnL"].sum());summary={"Positions":len(df),"Value":total_val,"PnL":total_pnl,"Return":total_pnl/total_inv*100 if total_inv else 0.0,"ActionCounts":df["Decision"].value_counts().to_dict(),"PredictionDate":prediction_date};return df,summary
