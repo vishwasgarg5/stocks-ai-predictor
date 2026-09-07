@@ -1,4 +1,5 @@
 import importlib
+import time
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from pathlib import Path
 import numpy as np
@@ -54,13 +55,22 @@ def load_universe():
         except Exception:continue
     raise RuntimeError("Unable to load NSE stock universe")
 
-def download_symbol(symbol,period=HISTORY_PERIOD):
-    try:
-        df=yf.download(f"{normalize_symbol(symbol)}.NS",period=period,interval="1d",auto_adjust=False,progress=False,threads=False);df=clean_ohlcv(df)
-        return df if len(df)>=30 else None
-    except Exception as exc:print(f"{symbol}: data download failed: {exc}");return None
+def download_symbol(symbol,period=HISTORY_PERIOD,retries=2):
+    ticker=f"{normalize_symbol(symbol)}.NS"
+    for attempt in range(retries+1):
+        try:
+            df=yf.download(ticker,period=period,interval="1d",auto_adjust=False,progress=False,threads=False)
+            df=clean_ohlcv(df)
+            if len(df)>=30:return df
+            if attempt<retries:time.sleep(1.5*(attempt+1))
+        except Exception as exc:
+            if attempt>=retries:
+                print(f"{symbol}: data download failed after retries: {exc}")
+            else:
+                time.sleep(1.5*(attempt+1))
+    return None
 
-def download_many(symbols,period=HISTORY_PERIOD,workers=8):
+def download_many(symbols,period=HISTORY_PERIOD,workers=6):
     result={};symbols=list(dict.fromkeys(symbols))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures={executor.submit(download_symbol,s,period):s for s in symbols}
