@@ -1,4 +1,4 @@
-"""Compact Telegram reports optimized for mobile screens."""
+"""Compact, Telegram-safe reports optimized for mobile screens."""
 import html
 import os
 import re
@@ -11,17 +11,15 @@ _SECTION = "\n§§TELEGRAM_SECTION§§\n"
 
 
 def _markdown_to_telegram_html(text):
-    """Convert the small Markdown subset used by reports into safe Telegram HTML."""
     chunks = text.split("```")
     rendered = []
     for i, chunk in enumerate(chunks):
-        if i % 2 == 1:
+        if i % 2:
             rendered.append(f"<pre>{html.escape(chunk.strip(chr(10)))}</pre>")
-            continue
-        safe = html.escape(chunk)
-        # Report headings are generated as *text*. Dynamic values are escaped above.
-        safe = re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", safe)
-        rendered.append(safe)
+        else:
+            safe = html.escape(chunk)
+            safe = re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", safe)
+            rendered.append(safe)
     return "".join(rendered)
 
 
@@ -30,41 +28,54 @@ def _plain_text_fallback(text):
 
 
 def _post_telegram(message, token, chat_id):
-    """Send formatted HTML, then retry as plain text if Telegram rejects entities."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        r = requests.post(
-            url,
-            json={"chat_id": chat_id, "text": _markdown_to_telegram_html(message), "parse_mode": "HTML"},
-            timeout=20,
-        )
+        r = requests.post(url, json={"chat_id": chat_id, "text": _markdown_to_telegram_html(message), "parse_mode": "HTML"}, timeout=20)
         if r.status_code == 200:
             return True
         print("Telegram HTML error:", r.text)
     except Exception as exc:
         print("Telegram HTML exception:", exc)
-
     try:
-        fallback = requests.post(
-            url,
-            json={"chat_id": chat_id, "text": _plain_text_fallback(message)},
-            timeout=20,
-        )
-        if fallback.status_code == 200:
+        r = requests.post(url, json={"chat_id": chat_id, "text": _plain_text_fallback(message)}, timeout=20)
+        if r.status_code == 200:
             print("Telegram: delivered using plain-text fallback.")
             return True
-        print("Telegram plain-text fallback error:", fallback.text)
+        print("Telegram plain-text fallback error:", r.text)
     except Exception as exc:
         print("Telegram plain-text fallback exception:", exc)
     return False
 
 
-def _send_part(part, token, chat_id):
-    ok = True
-    for message in split_messages(part.strip(), TELEGRAM_MAX_LENGTH):
-        if not _post_telegram(message, token, chat_id):
-            ok = False
-    return ok
+def _report_messages(text):
+    """Group the complete report into a few logical Telegram messages.
+
+    The report builder uses _SECTION only between top-level sections. Price
+    buckets themselves are intentionally kept inside the same section so they
+    cannot be sent as separate messages. Large groups are split at line
+    boundaries by split_messages().
+    """
+    parts = [p.strip() for p in text.split(_SECTION) if p.strip()]
+    if not parts:
+        return []
+
+    groups, current = [], []
+    # Boundaries are deliberately based on section headings, not bucket names.
+    # This produces: overview+buckets+best, predictions+horizons+jump,
+    # intraday+IPO+portfolio.
+    for part in parts:
+        heading = part.upper()
+        current.append(part)
+        if "BEST PICK" in heading or "JUMP WATCH" in heading or "MODEL LEARNING" in heading or "AI PORTFOLIO MANAGER" in heading:
+            groups.append("\n\n".join(current))
+            current = []
+    if current:
+        groups.append("\n\n".join(current))
+
+    output = []
+    for group in groups:
+        output.extend(split_messages(group, TELEGRAM_MAX_LENGTH))
+    return output
 
 
 def send_telegram(text):
@@ -73,48 +84,48 @@ def send_telegram(text):
     if not token or not chat_id:
         print("Telegram secrets not configured.")
         return False
-    parts = [p for p in text.split(_SECTION) if p.strip()]
-    # Try every section instead of stopping at the first failed section.
-    results = [_send_part(p, token, chat_id) for p in parts]
+    messages = _report_messages(text)
+    print(f"Telegram report: sending {len(messages)} message(s).")
+    results = [_post_telegram(m, token, chat_id) for m in messages]
     return bool(results) and all(results)
 
 
 def _fmt(v, digits=2):
     try:
-        return f"{float(v):,.{digits}f}"
+        x = float(v)
+        return "-" if not pd.notna(x) else f"{x:,.{digits}f}"
     except (TypeError, ValueError):
         return "-"
 
 
 def _pct(v):
     try:
-        return f"{float(v):+.1f}%"
+        x = float(v)
+        return "-" if not pd.notna(x) else f"{x:+.1f}%"
     except (TypeError, ValueError):
         return "-"
 
 
 def _accuracy(v):
     try:
-        return f"{float(v):.1f}%"
+        x = float(v)
+        return "-" if not pd.notna(x) else f"{x:.1f}%"
     except (TypeError, ValueError):
         return "-"
 
 
 def _table(headers, rows):
-    """Return a compact monospaced table. Short headers keep it readable on phones."""
     if not rows:
         return []
-    clean = []
-    for row in rows:
-        clean.append([str(x).replace("|", "/").replace("\n", " ") for x in row])
+    clean = [[str(x).replace("|", "/").replace("\n", " ") for x in row] for row in rows]
     widths = [len(str(h)) for h in headers]
     for row in clean:
         for i, value in enumerate(row):
             if i < len(widths):
                 widths[i] = min(max(widths[i], len(value)), 12)
-    def fit(value, width):
-        value = str(value)
-        return value if len(value) <= width else value[: max(1, width - 1)] + "…"
+    def fit(v, w):
+        v = str(v)
+        return v if len(v) <= w else v[:max(1, w - 1)] + "…"
     def line(row):
         return "  ".join(fit(v, widths[i]).ljust(widths[i]) for i, v in enumerate(row))
     return ["```", line(headers), "  ".join("-" * w for w in widths), *[line(r) for r in clean], "```"]
@@ -135,17 +146,11 @@ def _market(snapshot, regime):
     x = snapshot.get("VIX", {})
     rows.append(["VIX", _fmt(x.get("Close")), "-"])
     br = snapshot.get("Breadth", {})
-    return _table(["Index", "Value", "1D%"], rows) + [
-        f"Breadth: {int(br.get('Advancers', 0))}↑ / {int(br.get('Decliners', 0))}↓  |  Regime: {regime}"
-    ]
+    return _table(["Index", "Value", "1D%"], rows) + [f"Breadth: {int(br.get('Advancers', 0))}↑ / {int(br.get('Decliners', 0))}↓  |  Regime: {regime}"]
 
 
 def _scan(scan):
-    return (
-        f"Scanned {int(scan.get('Universe', 0)):,} | Data {int(scan.get('Data', 0)):,} | "
-        f"Liquid {int(scan.get('Liquid', 0)):,} | AI {int(scan.get('AI', 0)):,} | "
-        f"Qualified {int(scan.get('Selected', 0)):,}"
-    )
+    return f"Scanned {int(scan.get('Universe', 0)):,} | Data {int(scan.get('Data', 0)):,} | Liquid {int(scan.get('Liquid', 0)):,} | AI {int(scan.get('AI', 0)):,} | Qualified {int(scan.get('Selected', 0)):,}"
 
 
 def _score_col(g):
@@ -166,15 +171,7 @@ def _stock_rows(g):
         cmp = float(r.get("Current_Price", r.get("Current_Close", 0)) or 0)
         pred = float(r.get("Pred_Close", 0) or 0)
         exp = (pred / cmp - 1) * 100 if cmp else 0
-        rows.append([
-            str(r.get("Symbol", "-")),
-            f"₹{_fmt(cmp)}",
-            _pct(exp),
-            _pct(r.get("Horizon_1D")),
-            _pct(r.get("Horizon_5D")),
-            _pct(r.get("Horizon_20D")),
-            str(r.get("Action", "-")),
-        ])
+        rows.append([str(r.get("Symbol", "-")), f"₹{_fmt(cmp)}", _pct(exp), _pct(r.get("Horizon_1D")), _pct(r.get("Horizon_5D")), _pct(r.get("Horizon_20D")), str(r.get("Action", "-"))])
     return rows
 
 
@@ -184,16 +181,15 @@ def _bucket_sections(selected):
     if "PriceBucket" not in selected.columns:
         return ["No price bucket data."]
     lines = ["🎯 *QUALIFIED STOCKS BY PRICE BUCKET*"]
+    first = True
     for bucket in _ordered_price_buckets(selected["PriceBucket"]):
         g = selected[selected["PriceBucket"].astype(str) == bucket].copy()
         if g.empty:
             continue
-        g = _sort(g).head(6)
-        lines += [
-            _SECTION,
-            f"💎 *₹ {bucket}*  |  MAX 6",
-            *_table(["Stock", "CMP", "Exp", "1D", "5D", "20D", "Action"], _stock_rows(g)),
-        ]
+        if not first:
+            lines.append("")
+        first = False
+        lines += [f"💎 *₹ {bucket}*  |  MAX 6", *_table(["Stock", "CMP", "Exp", "1D", "5D", "20D", "Action"], _stock_rows(_sort(g).head(6)))]
     return lines
 
 
@@ -206,28 +202,14 @@ def _best_pick_table(selected):
         if g.empty:
             continue
         r = _sort(g).iloc[0]
-        rows.append([
-            f"₹{bucket}",
-            str(r.get("Symbol", "-")),
-            f"₹{_fmt(r.get('Current_Price', r.get('Current_Close')))}",
-            _pct(r.get("Expected_Return")),
-            f"{float(r.get('FinalDecisionScore', r.get('Score', 0))):.0f}",
-            str(r.get("Action", "-")),
-        ])
+        rows.append([f"₹{bucket}", str(r.get("Symbol", "-")), f"₹{_fmt(r.get('Current_Price', r.get('Current_Close')))}", _pct(r.get("Expected_Return")), f"{float(r.get('FinalDecisionScore', r.get('Score', 0))):.0f}", str(r.get("Action", "-"))])
     return ["🏆 *BEST PICK — 1 PER PRICE BUCKET*"] + _table(["Bucket", "Stock", "CMP", "Exp", "Score", "Action"], rows)
 
 
 def _prediction_table(selected):
     if selected is None or selected.empty:
         return []
-    rows = [[
-        str(r.get("Symbol", "-")),
-        _fmt(r.get("Pred_Open")),
-        _fmt(r.get("Pred_High")),
-        _fmt(r.get("Pred_Low")),
-        _fmt(r.get("Pred_Close")),
-        _pct(r.get("Expected_Return")),
-    ] for _, r in selected.iterrows()]
+    rows = [[str(r.get("Symbol", "-")), _fmt(r.get("Pred_Open")), _fmt(r.get("Pred_High")), _fmt(r.get("Pred_Low")), _fmt(r.get("Pred_Close")), _pct(r.get("Expected_Return"))] for _, r in selected.iterrows()]
     return ["📈 *PREDICTED OHLCV*"] + _table(["Stock", "Open", "High", "Low", "Close", "Exp"], rows)
 
 
@@ -243,8 +225,7 @@ def _jump(j):
         return []
     rows = []
     for _, r in j.iterrows():
-        cp = float(r.get("Current_Price", 0) or 0)
-        target = float(r.get("Target_Level", 0) or 0)
+        cp = float(r.get("Current_Price", 0) or 0); target = float(r.get("Target_Level", 0) or 0)
         rows.append([str(r.get("Symbol", "-")), f"₹{_fmt(cp)}", f"₹{_fmt(target)}", _pct((target / cp - 1) * 100 if cp else 0), f"{float(r.get('Jump_Probability', 0) or 0):.0f}%"])
     return ["🔥 *JUMP WATCH*"] + _table(["Stock", "CMP", "Target", "Upside", "Prob"], rows)
 
@@ -269,59 +250,18 @@ def _portfolio(p):
     rows = []
     for x in p.get("Rows", []):
         if isinstance(x, dict):
-            rows.append([
-                x.get("Stock", "-"), x.get("Quantity", "-"), x.get("Decision", "-"),
-                x.get("Current_Price", "-"), x.get("Average_Price", "-"),
-                x.get("Profit_Target", "-"), x.get("Sell_Window", "-"),
-            ])
-    lines = [
-        "💼 *AI PORTFOLIO MANAGER*",
-        *_table(["Stock", "Qty", "Decision", "CMP", "Avg", "Target", "Window"], rows),
-    ]
+            rows.append([x.get("Stock", "-"), x.get("Quantity", "-"), x.get("Decision", "-"), x.get("Current_Price", "-"), x.get("Average_Price", "-"), x.get("Profit_Target", "-"), x.get("Sell_Window", "-")])
+    lines = ["💼 *AI PORTFOLIO MANAGER*", *_table(["Stock", "Qty", "Decision", "CMP", "Avg", "Target", "Window"], rows)]
     if p.get("AveragePlans"):
-        lines += ["➕ *AVERAGING PLANS*", *_table(["Stock", "Add", "CMP", "NewAvg", "Target", "Window"], [[
-            x.get("Stock", "-"), x.get("Recommended_Qty", 0), x.get("Current_Price", "-"),
-            x.get("New_Average_Price", "-"), x.get("Profit_Target", "-"), x.get("Sell_Window", "-"),
-        ] for x in p["AveragePlans"]])]
+        lines += ["➕ *AVERAGING PLANS*", *_table(["Stock", "Add", "CMP", "NewAvg", "Target", "Window"], [[x.get("Stock", "-"), x.get("Recommended_Qty", 0), x.get("Current_Price", "-"), x.get("New_Average_Price", "-"), x.get("Profit_Target", "-"), x.get("Sell_Window", "-")] for x in p["AveragePlans"]])]
     if p.get("SellAlerts"):
-        lines += ["🚨 *SELL / PROFIT-BOOK ALERTS*", *_table(["Stock", "CMP", "Target", "When", "Reason"], [[
-            x.get("Stock", "-"), x.get("Current_Price", "-"), x.get("Profit_Target", "-"),
-            x.get("Sell_Window", "NOW"), x.get("Reason", "-"),
-        ] for x in p["SellAlerts"]])]
+        lines += ["🚨 *SELL / PROFIT-BOOK ALERTS*", *_table(["Stock", "CMP", "Target", "When", "Reason"], [[x.get("Stock", "-"), x.get("Current_Price", "-"), x.get("Profit_Target", "-"), x.get("Sell_Window", "NOW"), x.get("Reason", "-")] for x in p["SellAlerts"]])]
     return lines
 
 
 def morning_report(prediction_date, cutoff_date, selected, jump_watchlist, intraday, **kwargs):
-    accuracy = kwargs.get("accuracy", {})
-    scan = kwargs.get("scan", {})
-    portfolio = kwargs.get("portfolio", {})
-    snapshot = kwargs.get("market_snapshot", {})
-    regime = kwargs.get("regime", "-")
-    ipo = kwargs.get("ipo", pd.DataFrame())
-    lines = [
-        f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}",
-        _SECTION,
-        "📊 *MARKET OVERVIEW*",
-        *_market(snapshot, regime),
-        _scan(scan),
-        f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))} | Samples {int(accuracy.get('AccuracySamples', accuracy.get('Samples', 0)) or 0)}",
-        _SECTION,
-        *_bucket_sections(selected),
-        _SECTION,
-        *_best_pick_table(selected),
-        _SECTION,
-        *_prediction_table(selected),
-        _SECTION,
-        *_horizon_table(selected),
-        _SECTION,
-        *_jump(jump_watchlist),
-        _SECTION,
-        *_intraday(intraday),
-        _SECTION,
-        *_ipo(ipo),
-        _SECTION,
-        *_portfolio(portfolio),
-    ]
+    accuracy = kwargs.get("accuracy", {}); scan = kwargs.get("scan", {}); portfolio = kwargs.get("portfolio", {}); snapshot = kwargs.get("market_snapshot", {}); regime = kwargs.get("regime", "-"); ipo = kwargs.get("ipo", pd.DataFrame())
+    lines = [f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}", _SECTION, "📊 *MARKET OVERVIEW*", *_market(snapshot, regime), _scan(scan), f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))} | Samples {int(accuracy.get('AccuracySamples', accuracy.get('Samples', 0)) or 0)}", _SECTION, *_bucket_sections(selected), _SECTION, *_best_pick_table(selected), _SECTION, *_prediction_table(selected), _SECTION, *_horizon_table(selected), _SECTION, *_jump(jump_watchlist), _SECTION, *_intraday(intraday), _SECTION, *_ipo(ipo), _SECTION, *_portfolio(portfolio)]
     return "\n".join(lines)
 
 
@@ -333,20 +273,12 @@ def _evening_bucket_sections(evaluation):
     lines = ["📋 *PREDICTION vs ACTUAL — BY PRICE BUCKET*"]
     for bucket in _ordered_price_buckets(evaluation["PriceBucket"]):
         g = evaluation[evaluation["PriceBucket"].astype(str) == bucket].copy()
-        if g.empty:
-            continue
+        if g.empty: continue
         rows = []
         for _, r in g.sort_values("APE_Close", key=lambda s: s.abs(), kind="mergesort").head(6).iterrows():
             ok = "OK" if bool(r.get("DirectionCorrect", False)) else "NO"
-            rows.append([
-                f"{r.get('Symbol', '-')}/{ok}",
-                f"{_fmt(r.get('Pred_Open'))}/{_fmt(r.get('Actual_Open'))}",
-                f"{_fmt(r.get('Pred_High'))}/{_fmt(r.get('Actual_High'))}",
-                f"{_fmt(r.get('Pred_Low'))}/{_fmt(r.get('Actual_Low'))}",
-                f"{_fmt(r.get('Pred_Close'))}/{_fmt(r.get('Actual_Close'))}",
-                f"{abs(float(r.get('APE_Close', 0) or 0)):.2f}%",
-            ])
-        lines += [_SECTION, f"💎 *₹ {bucket}*", *_table(["Stock", "Open P/A", "High P/A", "Low P/A", "Close P/A", "APE"], rows)]
+            rows.append([f"{r.get('Symbol', '-')}/{ok}", f"{_fmt(r.get('Pred_Open'))}/{_fmt(r.get('Actual_Open'))}", f"{_fmt(r.get('Pred_High'))}/{_fmt(r.get('Actual_High'))}", f"{_fmt(r.get('Pred_Low'))}/{_fmt(r.get('Actual_Low'))}", f"{_fmt(r.get('Pred_Close'))}/{_fmt(r.get('Actual_Close'))}", f"{abs(float(r.get('APE_Close', 0) or 0)):.2f}%"])
+        lines += ["", f"💎 *₹ {bucket}*", *_table(["Stock", "Open P/A", "High P/A", "Low P/A", "Close P/A", "APE"], rows)]
     return lines
 
 
@@ -359,39 +291,6 @@ def _evening_horizon_table(h):
 
 
 def evening_report(market_date, evaluation, metrics, retraining, **kwargs):
-    accuracy = kwargs.get("accuracy", {})
-    scan = kwargs.get("scan", {})
-    bucket = kwargs.get("bucket_metrics", {})
-    portfolio = kwargs.get("portfolio", {})
-    learning = kwargs.get("learning", {})
-    horizon = kwargs.get("horizon_metrics", {})
-    lines = [
-        f"🌙 *AI NSE EVENING REPORT*\n📅 {market_date}\n⚙️ {MODEL_VERSION}",
-        _SECTION,
-        "📊 *SCAN & ACCURACY*",
-        _scan(scan),
-        f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}",
-        _SECTION,
-        *_evening_bucket_sections(evaluation),
-        _SECTION,
-        "📊 *BUCKET ACCURACY*",
-        *_evening_accuracy_table(bucket),
-        _SECTION,
-        "🎯 *HORIZON ACCURACY*",
-        *_evening_horizon_table(horizon),
-        _SECTION,
-        "🧠 *MODEL LEARNING*",
-        *_table(["Metric", "Value"], [
-            ["Samples", metrics.get("Samples", 0)],
-            ["Overall MAPE", f"{metrics.get('OverallMAPE', 0):.3f}%"],
-            ["Close MAPE", f"{metrics.get('CloseMAPE', 0):.3f}%"],
-            ["Direction Acc", f"{metrics.get('DirectionAccuracy', 0):.1f}%"],
-            ["Champion", retraining.get("Decision", "-")],
-            ["Replaced", "YES" if retraining.get("Retrained") else "NO"],
-            ["Improvement", f"{retraining.get('Improvement', 0):+.2f}%"],
-            ["Learning", learning.get("status", "UPDATED")],
-        ]),
-        _SECTION,
-        *_portfolio(portfolio),
-    ]
+    accuracy = kwargs.get("accuracy", {}); scan = kwargs.get("scan", {}); bucket = kwargs.get("bucket_metrics", {}); portfolio = kwargs.get("portfolio", {}); learning = kwargs.get("learning", {}); horizon = kwargs.get("horizon_metrics", {})
+    lines = [f"🌙 *AI NSE EVENING REPORT*\n📅 {market_date}\n⚙️ {MODEL_VERSION}", _SECTION, "📊 *SCAN & ACCURACY*", _scan(scan), f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))}", _SECTION, *_evening_bucket_sections(evaluation), _SECTION, "📊 *BUCKET ACCURACY*", *_evening_accuracy_table(bucket), _SECTION, "🎯 *HORIZON ACCURACY*", *_evening_horizon_table(horizon), _SECTION, "🧠 *MODEL LEARNING*", *_table(["Metric", "Value"], [["Samples", metrics.get("Samples", 0)], ["Overall MAPE", f"{metrics.get('OverallMAPE', 0):.3f}%"], ["Close MAPE", f"{metrics.get('CloseMAPE', 0):.3f}%"], ["Direction Acc", f"{metrics.get('DirectionAccuracy', 0):.1f}%"], ["Champion", retraining.get("Decision", "-")], ["Replaced", "YES" if retraining.get("Retrained") else "NO"], ["Improvement", f"{retraining.get('Improvement', 0):+.2f}%"], ["Learning", learning.get("status", "UPDATED")]]), _SECTION, *_portfolio(portfolio)]
     return "\n".join(lines)
