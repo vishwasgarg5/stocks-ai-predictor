@@ -80,9 +80,9 @@ def test_morning_report_includes_buckets_and_portfolio_sections():
     from src.telegram_report import morning_report
     d=pd.DataFrame([{"Symbol":"TEST","PriceBucket":"100-249","Current_Price":100,"Pred_Close":108,"Expected_Return":8,"Confidence":80,"FinalDecisionScore":80,"Action":"BUY","Horizon_1D":3,"Horizon_5D":7,"Horizon_20D":12}])
     report=morning_report("2026-09-07","2026-09-04",d,pd.DataFrame(),pd.DataFrame(),accuracy={"PreviousAccuracy":70,"CurrentAccuracy":72},scan={"Universe":100,"Data":90,"Liquid":80,"AI":40,"Selected":1},portfolio={"Positions":1,"Value":10000,"PnL":500,"Return":5,"Rows":[{"Stock":"TEST","Quantity":10,"Decision":"HOLD","Current_Price":"₹100","Average_Price":"₹95","Profit_Target":"₹104.50","Sell_Window":"2026-09-10"}]})
-    assert "100-249" in report and "BEST PICK" in report and "AI PORTFOLIO MANAGER" in report and "Sell Window" in report
+    assert "100-249" in report and "BEST PICK" in report and "AI PORTFOLIO MANAGER" in report and "Sell_Window" in report
 def test_morning_report_sections_are_explicitly_separated_and_ordered():
-    from src.telegram_report import morning_report
+    from src.telegram_report import morning_report,_report_messages
     buckets=[">2500","50-99","100-249","10-49","500-999","250-499","1000-2499"]
     d=pd.DataFrame([{"Symbol":f"S{i}","PriceBucket":b,"Current_Price":20+i*500,"Pred_Close":21+i*500,"FinalDecisionScore":80-i,"Action":"BUY","Horizon_1D":1,"Horizon_5D":2,"Horizon_20D":3} for i,b in enumerate(buckets)])
     report=morning_report("2026-09-07","2026-09-04",d,pd.DataFrame(),pd.DataFrame(),scan={},accuracy={},portfolio={})
@@ -91,10 +91,19 @@ def test_morning_report_sections_are_explicitly_separated_and_ordered():
     bucket_order=["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
     positions=[next(i for i,s in enumerate(sections) if f"₹ {b}" in s) for b in bucket_order]
     assert positions==sorted(positions)
+    assert len(_report_messages(report))>=1
     assert any("BEST PICK" in s for s in sections)
     assert any("PREDICTED OHLCV" in s for s in sections)
     assert any("MULTI-HORIZON OUTLOOK" in s for s in sections)
     assert any("AI PORTFOLIO MANAGER" in s for s in sections)
+def test_bucket_labels_are_human_readable():
+    from src.telegram_report import _bucket_label
+    assert [_bucket_label(x) for x in ["B7","B6","B5","B4","B3","B2","B1"]]==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
+def test_nan_market_values_are_hidden():
+    from src.telegram_report import _market
+    rows=_market({"FINNIFTY":{"Close":np.nan,"Change1D":np.nan}},"SIDEWAYS")
+    joined="\n".join(rows)
+    assert "nan" not in joined.lower()
 def test_telegram_html_escaping_and_formatting():
     from src.telegram_report import _markdown_to_telegram_html
     source="📈 *AI NSE MORNING REPORT*\nABC_TEST.NS [WATCH] -2.5% | ₹123.45\n```\nA_B [C] <D>\n```"
