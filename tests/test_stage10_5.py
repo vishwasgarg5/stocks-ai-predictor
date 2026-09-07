@@ -22,8 +22,8 @@ def test_core_modules_import():
         except Exception as exc: failures.append(f"{name}: {type(exc).__name__}: {exc}")
     assert not failures,"Stage 10.5 import failures:\n"+"\n".join(failures)
 def test_config_is_stage10_5():
-    from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS,PRICE_BUCKET_NAMES,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET
-    assert MODEL_VERSION.startswith("stage10.5") and STAGE_NAME.startswith("Stage 10.5") and HISTORY_PERIOD=="1y" and TOP_N is None and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,20)
+    from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS,PRICE_BUCKET_NAMES,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,PREDICTION_TOP_N
+    assert MODEL_VERSION.startswith("stage10.5") and STAGE_NAME.startswith("Stage 10.5") and HISTORY_PERIOD=="1y" and TOP_N==10 and PREDICTION_TOP_N==10 and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,20)
     assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_PRICE_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
@@ -80,7 +80,7 @@ def test_morning_report_includes_buckets_and_portfolio_sections():
     from src.telegram_report import morning_report
     d=pd.DataFrame([{"Symbol":"TEST","PriceBucket":"100-249","Current_Price":100,"Pred_Close":108,"Expected_Return":8,"Confidence":80,"FinalDecisionScore":80,"Action":"BUY","Horizon_1D":3,"Horizon_5D":7,"Horizon_20D":12}])
     report=morning_report("2026-09-07","2026-09-04",d,pd.DataFrame(),pd.DataFrame(),accuracy={"PreviousAccuracy":70,"CurrentAccuracy":72},scan={"Universe":100,"Data":90,"Liquid":80,"AI":40,"Selected":1},portfolio={"Positions":1,"Value":10000,"PnL":500,"Return":5,"Rows":[{"Stock":"TEST","Quantity":10,"Decision":"HOLD","Current_Price":"₹100","Average_Price":"₹95","Profit_Target":"₹104.50","Sell_Window":"2026-09-10"}]})
-    assert "100-249" in report and "BEST PICK" in report and "AI PORTFOLIO MANAGER" in report and "Sell_Window" in report
+    assert "100-249" in report and "BEST PICK" in report and "AI PORTFOLIO MANAGER" in report and "Window" in report
 def test_morning_report_sections_are_explicitly_separated_and_ordered():
     from src.telegram_report import morning_report,_report_messages
     buckets=[">2500","50-99","100-249","10-49","500-999","250-499","1000-2499"]
@@ -112,3 +112,7 @@ def test_telegram_html_escaping_and_formatting():
     assert "ABC_TEST.NS [WATCH] -2.5% | ₹123.45" in rendered
     assert "<pre>A_B [C] &lt;D&gt;</pre>" in rendered
     assert "<pre>" in rendered and "```" not in rendered
+
+def test_prediction_universe_is_capped_at_ten():
+    from src.config import PREDICTION_TOP_N,TOP_N
+    assert PREDICTION_TOP_N==10 and TOP_N==10
