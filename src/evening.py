@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from .config import HISTORY_PERIOD,FINAL_LEARNING_STATE_FILE,PREDICTIONS_DIR,MULTI_HORIZONS,EVALUATIONS_DIR
 from .market_data import get_completed_session_date,get_previous_session_date,download_many,get_row_for_date,get_previous_row
-from .ledger import load_predictions,evaluation_exists,save_evaluation,append_daily_metrics,rebuild_stock_reliability,latest_prediction_date
+from .ledger import load_predictions,evaluation_exists,evaluation_path,save_evaluation,append_daily_metrics,rebuild_stock_reliability,latest_prediction_date
 from .retraining import compare_variants,maybe_rollback_live
 from .final_intelligence import update_learning_state
 from .telegram_report import send_telegram,evening_report
@@ -114,6 +114,23 @@ def _portfolio_payload():
         return s
     except Exception as exc:print(f"Portfolio report unavailable: {exc}");return {"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"Rows":["Portfolio data unavailable"]}
 
+def _send_existing_evaluation(market_date,prediction_date,predictions):
+    """If today's evaluation already exists, never rerun model/learning; send the stored result."""
+    try:
+        evaluation=pd.read_csv(evaluation_path(market_date))
+    except Exception as exc:
+        print(f"Existing evaluation could not be read: {exc}");return False
+    if evaluation.empty:
+        print(f"Existing evaluation for {market_date} is empty; running fresh evaluation.");return False
+    metrics=calculate_cumulative_metrics()
+    bucket=_bucket_metrics(evaluation,predictions)
+    accuracy=model_report_metrics();current_accuracy=_model_accuracy(metrics)
+    accuracy.update({"PreviousAccuracy":current_accuracy,"CurrentAccuracy":current_accuracy,"AccuracySamples":metrics.get("Samples",0),"Rollback":False})
+    p=_portfolio_payload()
+    report=evening_report(market_date,evaluation,metrics,{"Retrained":False,"Decision":"EXISTING DATA — REPORT SENT"},bucket_metrics=bucket,horizon_metrics={},learning={"status":"EXISTING DATA","drift":accuracy.get("Drift"),"health":accuracy.get("Health"),"rollback":False},scan={"Universe":len(predictions),"Data":len(predictions),"Liquid":len(predictions),"AI":len(predictions),"Selected":len(evaluation)},accuracy=accuracy,portfolio=p)
+    send_telegram(report);print(report)
+    return True
+
 def run():
     if not is_weekday():print("Weekend. Evening evaluation skipped.");return
     market_date=get_completed_session_date("evening")
@@ -122,7 +139,9 @@ def run():
     if prediction_date is None:print("No morning prediction ledger found.");return
     predictions=_ensure_price_bucket(load_predictions(prediction_date))
     if predictions.empty:print("Morning prediction file is empty.");return
-    if evaluation_exists(market_date):print(f"Evaluation already exists for {market_date}. Skipping.");return
+    if evaluation_exists(market_date):
+        if _send_existing_evaluation(market_date,prediction_date,predictions):return
+        print(f"Existing evaluation for {market_date} is unusable; continuing with fresh evaluation.")
     symbols=predictions["Symbol"].astype(str).tolist();data_map=download_many(symbols,HISTORY_PERIOD,workers=5);rows=[]
     for _,p in predictions.iterrows():
         df=data_map.get(p["Symbol"])
