@@ -9,6 +9,8 @@ import yfinance as yf
 from .config import DATA_DIR,UNIVERSE_FILES,NIFTY_SYMBOL,BANKNIFTY_SYMBOL,FINNIFTY_SYMBOL,MIDCPNIFTY_SYMBOL,VIX_SYMBOL,MAX_UNIVERSE,HISTORY_PERIOD,MIN_AVG_TRADED_VALUE,MIN_PRICE
 from .utils import clean_ohlcv
 NSE_EQUITY_URL="https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+OHLCV_CACHE_DIR=DATA_DIR/"stage2"/"ohlcv"
+OHLCV_CACHE_DIR.mkdir(parents=True,exist_ok=True)
 
 def normalize_symbol(symbol):
     symbol=str(symbol).strip().upper(); return symbol[:-3] if symbol.endswith(".NS") else symbol
@@ -37,9 +39,7 @@ def download_nse_equity_list():
 def load_universe():
     symbols=download_nse_equity_list()
     if symbols:
-        # Never truncate the NSE list before market-data quality/liquidity filtering.
-        print(f"Using full NSE equity universe: {len(symbols)} stocks")
-        return symbols
+        print(f"Using full NSE equity universe: {len(symbols)} stocks");return symbols
     for path in [Path(p) for p in UNIVERSE_FILES]:
         symbols=read_symbols_from_csv(path) if path.exists() else []
         if symbols:
@@ -49,28 +49,62 @@ def load_universe():
             module=importlib.import_module(module_name)
             for attr in ["NIFTY150_SYMBOLS","NIFTY_150_SYMBOLS","SYMBOLS","STOCKS"]:
                 values=getattr(module,attr,None)
-                if values:
-                    symbols=[normalize_symbol(x) for x in values]
-                    return symbols
+                if values:return [normalize_symbol(x) for x in values]
         except Exception:continue
     raise RuntimeError("Unable to load NSE stock universe")
 
+def _cache_path(symbol):return OHLCV_CACHE_DIR/f"{normalize_symbol(symbol)}.csv"
+
+def _read_cached_ohlcv(symbol):
+    path=_cache_path(symbol)
+    if not path.exists():return pd.DataFrame()
+    try:
+        df=pd.read_csv(path,index_col=0,parse_dates=True);df=clean_ohlcv(df)
+        return df.sort_index() if not df.empty else pd.DataFrame()
+    except Exception as exc:
+        print(f"{symbol}: cached data unreadable: {exc}");return pd.DataFrame()
+
+def _save_cached_ohlcv(symbol,df):
+    if df is None or df.empty:return
+    path=_cache_path(symbol);path.parent.mkdir(parents=True,exist_ok=True)
+    out=clean_ohlcv(df).sort_index();out=out[~out.index.duplicated(keep="last")];out.to_csv(path)
+
+def _download_range(ticker,start=None,end=None,period=None):
+    kwargs={"interval":"1d","auto_adjust":False,"progress":False,"threads":False}
+    if start is not None:kwargs["start"]=pd.Timestamp(start).strftime("%Y-%m-%d")
+    if end is not None:kwargs["end"]=pd.Timestamp(end).strftime("%Y-%m-%d")
+    if start is None and period is not None:kwargs["period"]=period
+    return clean_ohlcv(yf.download(ticker,**kwargs))
+
 def download_symbol(symbol,period=HISTORY_PERIOD,retries=2):
-    ticker=f"{normalize_symbol(symbol)}.NS"
-    for attempt in range(retries+1):
-        try:
-            df=yf.download(ticker,period=period,interval="1d",auto_adjust=False,progress=False,threads=False)
-            df=clean_ohlcv(df)
-            if len(df)>=30:return df
-            if attempt<retries:time.sleep(1.5*(attempt+1))
-        except Exception as exc:
-            if attempt>=retries:
-                print(f"{symbol}: data download failed after retries: {exc}")
-            else:
-                time.sleep(1.5*(attempt+1))
+    """Reuse repository OHLCV and fetch only missing history; persist merged rows."""
+    symbol=normalize_symbol(symbol);ticker=f"{symbol}.NS";cached=_read_cached_ohlcv(symbol)
+    today=pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).normalize()
+    try:
+        desired_start=today-pd.DateOffset(years=1) if str(period).lower()=="1y" else None
+        if desired_start is None:
+            desired=_download_range(ticker,period=period);merged=pd.concat([cached,desired]).sort_index() if not cached.empty else desired
+        elif cached.empty:
+            merged=_download_range(ticker,period=period)
+        else:
+            cached_start=pd.Timestamp(cached.index.min());cached_end=pd.Timestamp(cached.index.max())
+            frames=[cached]
+            if cached_start.date()>desired_start.date():frames.append(_download_range(ticker,start=desired_start,end=cached_start+pd.Timedelta(days=1)))
+            if cached_end.date()<today.date():frames.append(_download_range(ticker,start=cached_end+pd.Timedelta(days=1),end=today+pd.Timedelta(days=1)))
+            merged=pd.concat([x for x in frames if x is not None and not x.empty]).sort_index()
+        merged=merged[~merged.index.duplicated(keep="last")]
+        if not merged.empty:_save_cached_ohlcv(symbol,merged)
+        if desired_start is not None and not merged.empty:merged=merged[merged.index>=desired_start]
+        if len(merged)>=30:return merged
+        if retries>0:
+            time.sleep(1.0);fresh=_download_range(ticker,period=period);merged=pd.concat([cached,fresh]).sort_index() if not cached.empty else fresh;merged=merged[~merged.index.duplicated(keep="last")]
+            if not merged.empty:_save_cached_ohlcv(symbol,merged)
+            if desired_start is not None:merged=merged[merged.index>=desired_start]
+            if len(merged)>=30:return merged
+    except Exception as exc:print(f"{symbol}: incremental data update failed: {exc}")
     return None
 
-def download_many(symbols,period=HISTORY_PERIOD,workers=6):
+def download_many(symbols,period=HISTORY_PERIOD,workers=8):
     result={};symbols=list(dict.fromkeys(symbols))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures={executor.submit(download_symbol,s,period):s for s in symbols}
@@ -80,7 +114,7 @@ def download_many(symbols,period=HISTORY_PERIOD,workers=6):
                 df=future.result()
                 if df is not None and not df.empty:result[symbol]=df
             except Exception as exc:print(f"{symbol}: {exc}")
-    print(f"Downloaded usable data for {len(result)}/{len(symbols)} stocks");return result
+    print(f"Repository-cache data available for {len(result)}/{len(symbols)} stocks");return result
 
 def liquidity_score(df):
     if df is None or len(df)<20:return 0.0
@@ -91,10 +125,8 @@ def liquidity_score(df):
 def filter_liquid_universe(data_map):return {s:df for s,df in data_map.items() if liquidity_score(df)>0}
 
 def apply_universe_cap(data_map):
-    """Apply any optional cap only after data-quality/liquidity screening, ordered by liquidity."""
     if not MAX_UNIVERSE or MAX_UNIVERSE<=0:return data_map
-    ranked=sorted(data_map.items(),key=lambda item:liquidity_score(item[1]),reverse=True)
-    return dict(ranked[:int(MAX_UNIVERSE)])
+    ranked=sorted(data_map.items(),key=lambda item:liquidity_score(item[1]),reverse=True);return dict(ranked[:int(MAX_UNIVERSE)])
 
 def get_nifty_data(period="1y",symbol=None):
     try:return clean_ohlcv(yf.download(symbol or NIFTY_SYMBOL,period=period,interval="1d",auto_adjust=False,progress=False,threads=False))
@@ -104,8 +136,7 @@ def _index_snapshot(symbol,period="3mo",cutoff=None):
     df=get_nifty_data(period,symbol)
     if cutoff is not None and not df.empty:df=df[df.index.date<=pd.Timestamp(cutoff).date()]
     if df.empty:return {"Close":np.nan,"Change1D":np.nan}
-    close=float(df["Close"].iloc[-1]);prev=float(df["Close"].iloc[-2]) if len(df)>1 else close
-    return {"Close":close,"Change1D":(close/prev-1)*100 if prev else 0.0}
+    close=float(df["Close"].iloc[-1]);prev=float(df["Close"].iloc[-2]) if len(df)>1 else close;return {"Close":close,"Change1D":(close/prev-1)*100 if prev else 0.0}
 
 def get_market_snapshot(data_map=None,cutoff=None):
     snap={"NIFTY":_index_snapshot(NIFTY_SYMBOL,cutoff=cutoff),"BANKNIFTY":_index_snapshot(BANKNIFTY_SYMBOL,cutoff=cutoff),"FINNIFTY":_index_snapshot(FINNIFTY_SYMBOL,cutoff=cutoff),"MIDCPNIFTY":_index_snapshot(MIDCPNIFTY_SYMBOL,cutoff=cutoff),"VIX":_index_snapshot(VIX_SYMBOL,cutoff=cutoff)}
