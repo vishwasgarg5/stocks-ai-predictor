@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]
 REQUIRED_SOURCE_FILES=["src/__init__.py","src/config.py","src/features.py","src/market_data.py","src/models.py","src/prediction.py","src/multihorizon.py","src/selection.py","src/stage4_engine.py","src/stage45_engine.py","src/final_intelligence.py","src/evaluation.py","src/retraining.py","src/ledger.py","src/morning_runner.py","src/evening.py","src/telegram_report.py","src/weekly_report.py","src/portfolio_report.py"]
-REQUIRED_WORKFLOWS=[".github/workflows/stage10_4_morning.yml",".github/workflows/stage10_4_evening.yml",".github/workflows/stage10_4_weekly.yml"]
-FORBIDDEN_LEGACY_PATHS=[".github/workflows/stage2_morning.yml",".github/workflows/stage2_evening.yml",".github/workflows/stage2_weekly.yml",".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.py",".github/workflows/stage4_tests.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv","tests/test_stage2.py"]
+REQUIRED_WORKFLOWS=[".github/workflows/stage10_5_morning.yml",".github/workflows/stage10_5_evening.yml",".github/workflows/stage10_5_weekly.yml"]
+FORBIDDEN_LEGACY_PATHS=[".github/workflows/stage2_morning.yml",".github/workflows/stage2_evening.yml",".github/workflows/stage2_weekly.yml",".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.py",".github/workflows/stage4_tests.yml",".github/workflows/stage10_4_morning.yml",".github/workflows/stage10_4_evening.yml",".github/workflows/stage10_4_weekly.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv","tests/test_stage2.py"]
 CORE_MODULES=["src.config","src.features","src.market_data","src.models","src.prediction","src.multihorizon","src.selection","src.stage4_engine","src.stage45_engine","src.final_intelligence","src.evaluation","src.retraining","src.ledger","src.morning_runner","src.evening","src.telegram_report","src.weekly_report","src.portfolio_report"]
 def test_required_source_files_exist():
     for path in REQUIRED_SOURCE_FILES: assert (ROOT/path).exists(),path
@@ -14,7 +14,7 @@ def test_current_workflows_exist():
 def test_legacy_paths_are_removed():
     for path in FORBIDDEN_LEGACY_PATHS: assert not (ROOT/path).exists(),path
 def test_exactly_three_production_workflows():
-    assert sorted(p.name for p in (ROOT/".github/workflows").glob("*.yml"))==["stage10_4_evening.yml","stage10_4_morning.yml","stage10_4_weekly.yml"]
+    assert sorted(p.name for p in (ROOT/".github/workflows").glob("*.yml"))==["stage10_5_evening.yml","stage10_5_morning.yml","stage10_5_weekly.yml"]
 def test_core_modules_import():
     failures=[]
     for name in CORE_MODULES:
@@ -65,19 +65,22 @@ def test_final_action_guardrails():
     assert final_action(safe,"BULL")=="BUY" and final_action({**safe,"PredictionUncertaintyPct":20},"BULL")=="NO TRADE"
 def test_final_manifest_contract():
     from src.final_intelligence import final_stage_manifest
-    m=final_stage_manifest(); assert any(k in m for k in ["Stage10.4","Stage10.5"]) and "Validation" in m and "Abstention" in m and "Learning" in m
-def test_portfolio_engine_has_sell_average_and_timing_logic():
-    from src.portfolio_report import _sell_window,_avg_window,_plan
-    assert _sell_window({"Horizon_1D":11},110,100,"2026-09-04")=="2026-09-07"
-    assert _avg_window({"Horizon_3D":-3,"Horizon_7D":8},80,100,"2026-09-04").startswith("2026-09-07")
-    row=pd.Series({"Quantity":100.,"Current_Price":80.,"Average_Price":100.,"AI_Target":120.,"Reported_Return":np.nan,"Reported_PnL":np.nan,"PredictionDate":"2026-09-04","Horizon_5D":30.,"Horizon_1D":5.,"Horizon_3D":10.,"Horizon_7D":35.,"Horizon_20D":50.,"CalibratedConfidence":90.})
-    out=_plan(row.copy()); assert out["Decision"] in {"AVG","HOLD / RECOVERY","HOLD"} and out["Profit_Target_Price"]==110.
+    m=final_stage_manifest(); assert "Stage10.5" in m and "Stage10.4" not in m and "Validation" in m and "Abstention" in m and "Learning" in m
+def test_portfolio_engine_has_ai_target_chain():
+    from src.portfolio_report import _attach_predictions,_average_plan
+    pred=pd.DataFrame([{"Symbol":"TEST.NS","Pred_Close":120,"Pred_Open":118,"Pred_High":123,"Pred_Low":116,"Confidence":85,"Action":"BUY"}])
+    base=pd.DataFrame([{"Stock":"TEST.NS","Ticker":"TEST.NS","Quantity":100.,"Average_Price":100.,"Reported_PnL":np.nan,"Reported_Return":np.nan}])
+    import src.portfolio_report as pr
+    old=pr._latest_predictions;pr._latest_predictions=lambda:(pred,"2026-09-04")
+    try:
+        out,date=_attach_predictions(base);assert date=="2026-09-04" and float(out.loc[0,"AI_Target"])==120 and float(out.loc[0,"AI_High"])==123
+        out["Current_Price"]=90.;out["PredictionDate"]=date;out["CalibratedConfidence"]=85.;row=_average_plan(out.iloc[0].copy());assert row["Profit_Target_Price"]==110 and row["Projected_Return_At_AI_Target"]>10
+    finally:pr._latest_predictions=old
 def test_morning_report_includes_buckets_and_portfolio_sections():
     from src.telegram_report import morning_report
     d=pd.DataFrame([{"Symbol":"TEST","PriceBucket":"100-249","Current_Price":100,"Pred_Close":108,"Expected_Return":8,"Confidence":80,"FinalDecisionScore":80,"Action":"BUY","Horizon_1D":3,"Horizon_5D":7,"Horizon_20D":12}])
     report=morning_report("2026-09-07","2026-09-04",d,pd.DataFrame(),pd.DataFrame(),accuracy={"PreviousAccuracy":70,"CurrentAccuracy":72},scan={"Universe":100,"Data":90,"Liquid":80,"AI":40,"Selected":1},portfolio={"Positions":1,"Value":10000,"PnL":500,"Return":5,"Rows":[{"Stock":"TEST","Quantity":10,"Decision":"HOLD","Current_Price":"₹100","Average_Price":"₹95","Profit_Target":"₹104.50","Sell_Window":"2026-09-10"}]})
     assert "100-249" in report and "BEST PICK" in report and "AI PORTFOLIO MANAGER" in report and "Sell Window" in report
-
 def test_morning_report_sections_are_explicitly_separated_and_ordered():
     from src.telegram_report import morning_report
     buckets=[">2500","50-99","100-249","10-49","500-999","250-499","1000-2499"]
@@ -91,5 +94,4 @@ def test_morning_report_sections_are_explicitly_separated_and_ordered():
     assert any("BEST PICK" in s for s in sections)
     assert any("PREDICTED OHLCV" in s for s in sections)
     assert any("MULTI-HORIZON OUTLOOK" in s for s in sections)
-    assert any("JUMP WATCH" in s for s in sections) is False or True
     assert any("AI PORTFOLIO MANAGER" in s for s in sections)
