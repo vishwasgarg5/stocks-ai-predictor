@@ -35,10 +35,8 @@ def save_predictions(df,prediction_date,metadata=None):
     if path.exists():
         try:
             existing=pd.read_csv(path)
-            if not existing.empty:
-                # Canonical morning forecasts are immutable. A rerun must never replace them.
-                return path
-        except Exception: return path
+            if not existing.empty:return path
+        except Exception:return path
     enriched=_baseline_columns(df,metadata);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
     metadata["PredictionLedgerVersion"]="v4";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist() if "Prediction_ID" in enriched else []
     write_json(path.with_suffix(".json"),metadata);return path
@@ -56,9 +54,7 @@ def save_jump_predictions(df,prediction_date):path=jump_path(prediction_date);df
 def save_intraday_predictions(df,prediction_date):path=intraday_path(prediction_date);df.to_csv(path,index=False);return path
 def latest_prediction_date(on_or_before=None):
     if on_or_before is not None:
-        exact=pd.Timestamp(on_or_before).date();path=prediction_path(exact)
-        if path.exists():return exact
-        return None
+        exact=pd.Timestamp(on_or_before).date();return exact if prediction_path(exact).exists() else None
     files=sorted(PREDICTIONS_DIR.glob("predictions_*.csv"));dates=[]
     for path in files:
         match=re.search(r"predictions_(\d{4}-\d{2}-\d{2})",path.name)
@@ -67,7 +63,16 @@ def latest_prediction_date(on_or_before=None):
 def evaluation_exists(market_date):return evaluation_path(market_date).exists()
 def save_evaluation(df,market_date):
     path=evaluation_path(market_date);x=df.copy()
-    if "Prediction_ID" not in x.columns and {"PredictionDate","Symbol"}.issubset(x.columns):x["Prediction_ID"]=[_prediction_id(r.PredictionDate,r.Symbol,r.get("Cutoff_Date",r.PredictionDate),r.get("Model_Version",MODEL_VERSION)) for _,r in x.iterrows()]
+    if "Prediction_ID" not in x.columns:x["Prediction_ID"]=""
+    # Bind each evaluation row to the immutable canonical morning record for its prediction date.
+    if "PredictionDate" in x.columns and "Symbol" in x.columns:
+        for pdate,idxs in x.groupby(x["PredictionDate"].astype(str)).groups.items():
+            canonical=load_predictions(pd.Timestamp(pdate).date())
+            if canonical.empty or "Prediction_ID" not in canonical.columns:continue
+            ids=canonical[["Symbol","Prediction_ID"]].drop_duplicates("Symbol").set_index("Symbol")["Prediction_ID"].to_dict()
+            for idx in idxs:
+                pid=ids.get(str(x.at[idx,"Symbol"]))
+                if pid:x.at[idx,"Prediction_ID"]=pid
     if path.exists():
         try:
             existing=pd.read_csv(path)
