@@ -12,6 +12,12 @@ def _ticker(value):
     if key in NAME_TO_TICKER:return NAME_TO_TICKER[key]
     if raw.upper().endswith(".NS"):return raw.upper()
     return raw.upper().replace(" & ","").replace(" ","")+".NS"
+def _canonical_ticker(value):
+    """Normalize portfolio and prediction symbols to the same NSE key."""
+    raw=str(value).strip().upper()
+    if not raw or raw in {"NAN","NONE","<NA>"}:return ""
+    if raw.endswith(".NS"):return raw
+    return raw+".NS"
 def load_portfolio():
     if not PORTFOLIO_FILE.exists():return pd.DataFrame()
     df=pd.read_csv(PORTFOLIO_FILE)
@@ -36,11 +42,21 @@ def _latest_predictions():
         except Exception:continue
     return pd.DataFrame(),None
 def _attach_predictions(df):
+    """Attach the latest Top-10 AI rows using canonical NSE ticker keys.
+
+    Prediction CSVs store symbols such as ``WIPRO`` while the portfolio uses
+    ``WIPRO.NS``.  The previous direct merge therefore missed every AI row and
+    incorrectly classified every holding as TOP-10 ONLY.
+    """
     pred,pred_date=_latest_predictions()
     if pred.empty:return df,pred_date
     keep=[c for c in ["Symbol","Pred_Close","Pred_Open","Pred_High","Pred_Low","Confidence","CalibratedConfidence","Direction","FinalDecisionScore","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_7D","Horizon_20D"] if c in pred.columns]
-    p=pred[keep].copy().rename(columns={"Symbol":"Ticker","Pred_Close":"AI_Target","Pred_Open":"AI_Open","Pred_High":"AI_High","Pred_Low":"AI_Low","Action":"AI_Action"})
-    for c in ["AI_Target","AI_Open","AI_High","AI_Low"]:p[c]=pd.to_numeric(p[c],errors="coerce") if c in p else pd.NA
+    p=pred[keep].copy()
+    p["Ticker"]=p["Symbol"].map(_canonical_ticker)
+    p=p.drop(columns=["Symbol"]).rename(columns={"Pred_Close":"AI_Target","Pred_Open":"AI_Open","Pred_High":"AI_High","Pred_Low":"AI_Low","Action":"AI_Action"})
+    p=p.drop_duplicates(subset=["Ticker"],keep="last")
+    for c in ["AI_Target","AI_Open","AI_High","AI_Low"]:
+        if c in p:p[c]=pd.to_numeric(p[c],errors="coerce")
     for h in HORIZONS:
         c=f"Horizon_{h}D"
         if c in p.columns:p[c]=pd.to_numeric(p[c],errors="coerce")
