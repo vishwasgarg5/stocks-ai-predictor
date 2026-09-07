@@ -69,15 +69,18 @@ def _accuracy(v):
         x=float(v);return "-" if not pd.notna(x) else f"{x:.1f}%"
     except (TypeError,ValueError):return "-"
 def _table(headers,rows,max_width=12):
+    """Render every Telegram table in one consistent fixed-width pipe format."""
     if not rows:return []
-    clean=[[str(x).replace("|","/").replace("\n"," ") for x in row] for row in rows];widths=[len(str(h)) for h in headers]
+    clean=[[str(x).replace("|","/").replace("\n"," ") for x in row] for row in rows]
+    widths=[len(str(h)) for h in headers]
     for row in clean:
         for i,value in enumerate(row):
             if i<len(widths):widths[i]=min(max(widths[i],len(value)),max_width)
     def fit(v,w):
         v=str(v);return v if len(v)<=w else v[:max(1,w-1)]+"…"
-    def line(row):return "  ".join(fit(v,widths[i]).ljust(widths[i]) for i,v in enumerate(row))
-    return ["```",line(headers),"  ".join("-"*w for w in widths),*[line(r) for r in clean],"```"]
+    def line(row):return " | ".join(fit(v,widths[i]).ljust(widths[i]) for i,v in enumerate(row))
+    separator="-"*(sum(widths)+3*(len(widths)-1)+2)
+    return ["```",line(headers),separator,*[line(r) for r in clean],"```"]
 def _bucket_label(bucket,group=None):
     if group is not None and "PriceBucketLabel" in group.columns:
         vals=group["PriceBucketLabel"].dropna().astype(str)
