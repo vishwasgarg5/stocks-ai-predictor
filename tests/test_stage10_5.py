@@ -95,3 +95,11 @@ def test_morning_report_sections_are_explicitly_separated_and_ordered():
     assert any("PREDICTED OHLCV" in s for s in sections)
     assert any("MULTI-HORIZON OUTLOOK" in s for s in sections)
     assert any("AI PORTFOLIO MANAGER" in s for s in sections)
+def test_telegram_html_escaping_and_formatting():
+    from src.telegram_report import _markdown_to_telegram_html
+    source="📈 *AI NSE MORNING REPORT*\nABC_TEST.NS [WATCH] -2.5% | ₹123.45\n```\nA_B [C] <D>\n```"
+    rendered=_markdown_to_telegram_html(source)
+    assert "<b>AI NSE MORNING REPORT</b>" in rendered
+    assert "ABC_TEST.NS [WATCH] -2.5% | ₹123.45" in rendered
+    assert "<pre>A_B [C] &lt;D&gt;</pre>" in rendered
+    assert "<pre>" in rendered and "```" not in rendered
