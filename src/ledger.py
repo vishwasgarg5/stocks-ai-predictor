@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import re
 import pandas as pd
 from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,JUMP_METRICS_FILE,INTRADAY_METRICS_FILE
@@ -18,7 +19,9 @@ def prediction_exists(prediction_date):
         return len(df)>=1 and "Symbol" in df.columns
     except Exception:return False
 
-def morning_report_sent(prediction_date): return morning_report_path(prediction_date).exists()
+def morning_report_sent(prediction_date):
+    if os.getenv("GITHUB_EVENT_NAME")=="workflow_dispatch": return False
+    return morning_report_path(prediction_date).exists()
 def mark_morning_report_sent(prediction_date): write_json(morning_report_path(prediction_date),{"PredictionDate":str(prediction_date),"ReportSent":True})
 
 def save_predictions(df,prediction_date,metadata=None):
