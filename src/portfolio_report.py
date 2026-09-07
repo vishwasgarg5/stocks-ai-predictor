@@ -24,11 +24,12 @@ def _symbol(ticker):return str(ticker).upper().removesuffix(".NS")
 def load_portfolio():
     if not PORTFOLIO_FILE.exists():return pd.DataFrame()
     df=pd.read_csv(PORTFOLIO_FILE)
-    if {"Stock","Quantity","Average_Price"}.issubset(df.columns):out=df[["Stock","Quantity","Average_Price"]].copy();out["Reported_PnL"]=pd.NA;out["Reported_Return"]=pd.NA
-    elif {"Stock","Quantity","Current_PnL_INR","Return_Percent"}.issubset(df.columns):out=df[["Stock","Quantity","Current_PnL_INR","Return_Percent"]].copy().rename(columns={"Current_PnL_INR":"Reported_PnL","Return_Percent":"Reported_Return"});out["Average_Price"]=pd.NA
+    source_col="Symbol" if "Symbol" in df.columns else "Stock"
+    if {source_col,"Quantity","Average_Price"}.issubset(df.columns):out=df[[source_col,"Quantity","Average_Price"]].copy().rename(columns={source_col:"Stock"});out["Reported_PnL"]=pd.NA;out["Reported_Return"]=pd.NA
+    elif {source_col,"Quantity","Current_PnL_INR","Return_Percent"}.issubset(df.columns):out=df[[source_col,"Quantity","Current_PnL_INR","Return_Percent"]].copy().rename(columns={source_col:"Stock","Current_PnL_INR":"Reported_PnL","Return_Percent":"Reported_Return"});out["Average_Price"]=pd.NA
     else:return pd.DataFrame()
     for c in ["Quantity","Average_Price","Reported_PnL","Reported_Return"]:out[c]=pd.to_numeric(out[c],errors="coerce")
-    out["Quantity"]=out["Quantity"].fillna(0);out["Ticker"]=out["Stock"].map(_ticker);return out
+    out["Quantity"]=out["Quantity"].fillna(0);out["Ticker"]=out["Stock"].map(_ticker);out["Stock"]=out["Ticker"].map(_symbol);return out
 def _price(ticker):
     try:
         d=yf.download(ticker,period="5d",interval="1d",auto_adjust=False,progress=False,threads=False)
@@ -45,11 +46,6 @@ def _latest_predictions():
         except Exception:continue
     return pd.DataFrame(),None
 def _portfolio_ai_predictions(df,pred_date):
-    """Generate the same Stage-10.5 AI forecast for portfolio holdings absent from Top-10.
-
-    The broad market prediction remains Top-10 only. Portfolio holdings get an
-    additional on-demand forecast solely for portfolio decision/AI-window use.
-    """
     if df.empty:return df
     cutoff=pred_date
     if not cutoff:return df
@@ -60,25 +56,19 @@ def _portfolio_ai_predictions(df,pred_date):
             history=download_symbol(ticker,HISTORY_PERIOD)
             if history is None or history.empty:continue
             bundle=train_stock_bundle(history,symbol,cutoff,"A",train_horizons=True)
-            result=predict_stock(history,bundle,cutoff)
-            horizons=add_multihorizon_predictions(history,bundle,cutoff)
-            idx=df.index[df["Ticker"]==ticker]
+            result=predict_stock(history,bundle,cutoff);horizons=add_multihorizon_predictions(history,bundle,cutoff);idx=df.index[df["Ticker"]==ticker]
             if len(idx)==0:continue
             for i in idx:
                 for key in ["Current_Price","Pred_Open","Pred_High","Pred_Low","Pred_Close","Confidence","Direction"]:
                     if key in result:df.at[i,key if key=="Current_Price" else ("AI_"+key if key.startswith("Pred_") else "AI_"+key)]=result[key]
-                df.at[i,"AI_Target"]=result.get("Pred_Close")
-                df.at[i,"AI_Open"]=result.get("Pred_Open");df.at[i,"AI_High"]=result.get("Pred_High");df.at[i,"AI_Low"]=result.get("Pred_Low")
-                df.at[i,"AI_Confidence"]=result.get("Confidence");df.at[i,"AI_Direction"]=result.get("Direction");df.at[i,"AI_Source"]="PORTFOLIO_ON_DEMAND"
+                df.at[i,"AI_Target"]=result.get("Pred_Close");df.at[i,"AI_Open"]=result.get("Pred_Open");df.at[i,"AI_High"]=result.get("Pred_High");df.at[i,"AI_Low"]=result.get("Pred_Low");df.at[i,"AI_Confidence"]=result.get("Confidence");df.at[i,"AI_Direction"]=result.get("Direction");df.at[i,"AI_Source"]="PORTFOLIO_ON_DEMAND"
                 for _,hr in horizons.iterrows():df.at[i,f"Horizon_{int(hr['HorizonDays'])}D"]=float(hr["Expected_Return"])
-        except Exception as exc:
-            print(f"Portfolio AI forecast warning {symbol}: {exc}")
+        except Exception as exc:print(f"Portfolio AI forecast warning {symbol}: {exc}")
     return df
 def _attach_predictions(df):
     pred,pred_date=_latest_predictions()
     if pred.empty:
-        df["AI_Target"]=np.nan
-        return _portfolio_ai_predictions(df,pred_date)
+        df["AI_Target"]=np.nan;return _portfolio_ai_predictions(df,pred_date)
     keep=[c for c in ["Symbol","Pred_Close","Pred_Open","Pred_High","Pred_Low","Confidence","CalibratedConfidence","Direction","FinalDecisionScore","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_7D","Horizon_20D"] if c in pred.columns]
     p=pred[keep].copy();p["Ticker"]=p["Symbol"].map(_canonical_ticker);p=p.drop(columns=["Symbol"]).rename(columns={"Pred_Close":"AI_Target","Pred_Open":"AI_Open","Pred_High":"AI_High","Pred_Low":"AI_Low","Action":"AI_Action"});p=p.drop_duplicates(subset=["Ticker"],keep="last")
     for c in ["AI_Target","AI_Open","AI_High","AI_Low"]:
@@ -86,8 +76,7 @@ def _attach_predictions(df):
     for h in HORIZONS:
         c=f"Horizon_{h}D"
         if c in p.columns:p[c]=pd.to_numeric(p[c],errors="coerce")
-    merged=df.merge(p,on="Ticker",how="left")
-    return _portfolio_ai_predictions(merged,pred_date),pred_date
+    merged=df.merge(p,on="Ticker",how="left");return _portfolio_ai_predictions(merged,pred_date),pred_date
 def _next_trading_date(start_date,days):
     if not start_date:return "-"
     d=pd.Timestamp(start_date);count=0
@@ -104,8 +93,7 @@ def _sell_window(row,target_price,current,prediction_date):
             date=_next_trading_date(prediction_date,h)
             if h<=1:return f"1D ({date})"
             start=_next_trading_date(prediction_date,max(1,h-2));return f"{h}D ({start}→{date})"
-    available=[h for h in HORIZONS if pd.notna(row.get(f"Horizon_{h}D"))]
-    return f">{max(available)}D" if available else "NO AI DATA"
+    available=[h for h in HORIZONS if pd.notna(row.get(f"Horizon_{h}D"))];return f">{max(available)}D" if available else "NO AI DATA"
 def _average_plan(row):
     qty=float(row["Quantity"] or 0);price=row["Current_Price"];avg=row["Average_Price"];target=row.get("AI_Target")
     if pd.isna(avg) and price is not None and pd.notna(row["Reported_Return"]) and float(row["Reported_Return"])>-100:avg=price/(1+float(row["Reported_Return"])/100);row["Average_Price"]=avg;row["AveragePriceSource"]="ESTIMATED_FROM_RETURN"
