@@ -57,7 +57,9 @@ def _portfolio_ai_predictions(df,pred_date):
                 bundle=train_stock_bundle(history,symbol,pred_date,"A",train_horizons=True);result=predict_stock(history,bundle,pred_date);horizons=add_multihorizon_predictions(history,bundle,pred_date)
                 df.at[i,"AI_Target"]=result.get("Pred_Close");df.at[i,"AI_Open"]=result.get("Pred_Open");df.at[i,"AI_High"]=result.get("Pred_High");df.at[i,"AI_Low"]=result.get("Pred_Low");df.at[i,"AI_Confidence"]=result.get("Confidence");df.at[i,"AI_Direction"]=result.get("Direction")
                 for _,hr in horizons.iterrows():df.at[i,f"Horizon_{int(hr['HorizonDays'])}D"]=float(hr["Expected_Return"])
-            long_bundle=train_portfolio_long_horizon_models(history,pred_date);long_forecasts=predict_portfolio_long_horizons(history,long_bundle,pred_date)
+            long_history=download_symbol(ticker,"5y")
+            if long_history is None or long_history.empty:long_history=history
+            long_bundle=train_portfolio_long_horizon_models(long_history,pred_date);long_forecasts=predict_portfolio_long_horizons(long_history,long_bundle,pred_date)
             for _,hr in long_forecasts.iterrows():df.at[i,f"Horizon_{int(hr['HorizonDays'])}D"]=float(hr["Expected_Return"])
         except Exception as exc:print(f"Portfolio extended forecast warning {symbol}: {exc}")
     return df
