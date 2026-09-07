@@ -6,8 +6,8 @@ from src.telegram_report import morning_report, evening_report
 
 def _candidate_frame():
     return pd.DataFrame([{
-        "Symbol": "TEST", "PriceBucket": "B3", "Current_Price": 250.0,
-        "Pred_Close": 265.0, "Pred_Open": 252.0, "Pred_High": 268.0, "Pred_Low": 248.0,
+        "Symbol": "TEST", "PriceBucket": "B3", "Current_Price": 750.0,
+        "Pred_Close": 795.0, "Pred_Open": 752.0, "Pred_High": 805.0, "Pred_Low": 748.0,
         "Confidence": 85.0, "ReliabilityScore": 85.0, "ReliabilitySamples": 60,
         "Direction": "UP", "Expected_Return": 6.0, "MultiHorizonExpectedReturn": 5.0,
         "TechnicalScore": 85.0, "RiskAdjustedScore": 85.0, "Score": 85.0,
@@ -30,7 +30,7 @@ def test_stage10_candidate_to_morning_report_integration():
     )
     assert "AI NSE MORNING REPORT" in report
     assert "QUALIFIED STOCKS BY PRICE BUCKET" in report
-    assert "250-499" in report
+    assert "500-999" in report
     assert "BEST PICK" in report
     assert "PREDICTED OHLCV" in report
     assert "MULTI-HORIZON OUTLOOK" in report
@@ -46,11 +46,11 @@ def test_stage10_learning_state_persists(tmp_path):
 def test_stage10_evening_report_integration():
     evaluation = pd.DataFrame([{
         "Symbol": "TEST", "PriceBucket": "B3",
-        "Pred_Open": 252.0, "Pred_High": 268.0, "Pred_Low": 248.0, "Pred_Close": 265.0,
-        "Actual_Open": 253.0, "Actual_High": 267.0, "Actual_Low": 249.0, "Actual_Close": 264.0,
+        "Pred_Open": 752.0, "Pred_High": 805.0, "Pred_Low": 748.0, "Pred_Close": 795.0,
+        "Actual_Open": 753.0, "Actual_High": 804.0, "Actual_Low": 749.0, "Actual_Close": 794.0,
         "Diff_Open": 1.0, "Diff_High": -1.0, "Diff_Low": 1.0, "Diff_Close": -1.0,
         "Pred_Direction": "UP", "Actual_Direction": "UP", "DirectionCorrect": True,
-        "APE_Close": 0.38,
+        "APE_Close": 0.13,
     }])
     report = evening_report(
         "2026-09-03", evaluation,
