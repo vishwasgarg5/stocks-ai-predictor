@@ -23,19 +23,27 @@ def save_decisions(predictions,prediction_date):
     old=_read();x=pd.concat([old,pd.DataFrame(rows)],ignore_index=True);x=x.drop_duplicates(["PredictionDate","Symbol"],keep="last");DECISION_LEDGER_FILE.parent.mkdir(parents=True,exist_ok=True);x.to_csv(DECISION_LEDGER_FILE,index=False)
 
 def evaluate_decisions(prediction_date,evaluation_date,data_map):
-    x=_read();
+    x=_read()
     if x.empty:return pd.DataFrame()
-    mask=(x["PredictionDate"].astype(str)==str(prediction_date))&(x["Outcome"].astype(str)=="OPEN");rows=[]
+    mask=(x["PredictionDate"].astype(str)==str(prediction_date))&(x["Outcome"].astype(str)=="OPEN")
+    rows=[]
     for idx,r in x[mask].iterrows():
-        df=data_map.get(str(r["Symbol"]));
+        df=data_map.get(str(r["Symbol"]))
         if df is None or df.empty:continue
         dates=pd.DatetimeIndex(df.index).normalize();hits=np.where(dates==pd.Timestamp(evaluation_date))[0]
         if len(hits)==0:continue
         a=df.iloc[int(hits[0])];entry=float(r["EntryPrice"]);close=float(a["Close"]);high=float(a["High"]);low=float(a["Low"])
         if entry<=0:continue
         ret=(close/entry-1)*100;mfe=(high/entry-1)*100;mae=(low/entry-1)*100;action=str(r["Action"]).upper();outcome="WIN" if (action=="BUY" and ret>0) or (action=="AVOID" and ret<0) else ("LOSS" if (action=="BUY" and ret<0) or (action=="AVOID" and ret>0) else "NEUTRAL")
-        x.loc[idx,["EvaluationDate","ActualOpen","ActualHigh","ActualLow","ActualClose","ReturnPct","MFEPct","MAEPct","Outcome","DirectionCorrect"]]=[str(evaluation_date),float(a["Open"]),high,low,close,ret,mfe,mae,outcome,float((ret>0 and r["PredictedClose"]>entry) or (ret<0 and r["PredictedClose"]<entry) or (ret==0 and r["PredictedClose"]==entry))];rows.append(x.loc[idx].to_dict())
-    x.to_csv(DECISION_LEDGER_FILE,index=False);return pd.DataFrame(rows)
+        direction_correct=float((ret>0 and float(r["PredictedClose"])>entry) or (ret<0 and float(r["PredictedClose"])<entry) or (ret==0 and float(r["PredictedClose"])==entry))
+        # Assign through a row dictionary rather than mixed-type column assignment.
+        # This is compatible with pandas 3.x, which rejects implicit object upcasts.
+        update={"EvaluationDate":str(evaluation_date),"ActualOpen":float(a["Open"]),"ActualHigh":high,"ActualLow":low,"ActualClose":close,"ReturnPct":ret,"MFEPct":mfe,"MAEPct":mae,"Outcome":outcome,"DirectionCorrect":direction_correct}
+        for col,value in update.items():
+            x.at[idx,col]=value
+        rows.append(x.loc[idx].to_dict())
+    x.to_csv(DECISION_LEDGER_FILE,index=False)
+    return pd.DataFrame(rows)
 
 def summary(days=30):
     x=_read();x=x[x["Outcome"].astype(str)!="OPEN"].copy()
