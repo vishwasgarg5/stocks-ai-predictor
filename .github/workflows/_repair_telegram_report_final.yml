@@ -1,0 +1,168 @@
+name: Final Telegram Report Repair
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message != 'Final Telegram Report Repair'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore clean report and apply final fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 6c355b263f9126b18a956697981d1861e83ef77a:src/telegram_report.py > src/telegram_report.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/telegram_report.py')
+          s = p.read_text()
+
+          old = '''def _best_pick_table(selected):
+              if selected is None or selected.empty or "PriceBucket" not in selected.columns:
+                  return []
+              rows = []
+              for bucket in _ordered_price_buckets(selected["PriceBucket"]):
+                  g = selected[selected["PriceBucket"].astype(str) == bucket].copy()
+                  if g.empty: continue
+                  r = _sort(g).iloc[0]
+                  score = r.get("FinalDecisionScore", r.get("Score", 0))
+                  rows.append([f"₹{_bucket_label(bucket,g)}", str(r.get("Symbol","-")), f"₹{_fmt(r.get('Current_Price',r.get('Current_Close')))}", _pct(r.get("Expected_Return")), f"{float(score or 0):.0f}", str(r.get("Action","-"))])
+              return ["🏆 *BEST PICK — 1 PER PRICE BUCKET*", *_table(["Bucket","Stock","CMP","Exp","Score","Action"], rows)]
+          '''
+          new = '''def _best_pick_table(selected):
+              if selected is None or selected.empty or "PriceBucket" not in selected.columns:
+                  return []
+              rows = []
+              for bucket in _ordered_price_buckets(selected["PriceBucket"]):
+                  g = selected[selected["PriceBucket"].astype(str) == bucket].copy()
+                  if g.empty:
+                      continue
+                  r = _sort(g).iloc[0]
+                  score = _num(r.get("FinalDecisionScore", r.get("Score")), None)
+                  rows.append([f"₹{_bucket_label(bucket,g)}", str(r.get("Symbol","-")), f"₹{_fmt(r.get('Current_Price',r.get('Current_Close')))}", _pct(r.get("Expected_Return")), "-" if score is None else f"{score:.0f}", _decision(r.get("Action"))])
+              return ["🏆 *BEST PICK — 1 PER PRICE BUCKET*", *_table(["Bucket","Stock","CMP","Exp","Score","Action"], rows)]
+          '''
+          if old not in s: raise SystemExit('best pick block not found')
+          s = s.replace(old, new)
+
+          old = '''def _prediction_table(selected):
+              if selected is None or selected.empty: return []
+              rows = [[str(r.get("Symbol","-")), _fmt(r.get("Pred_Open")), _fmt(r.get("Pred_High")), _fmt(r.get("Pred_Low")), _fmt(r.get("Pred_Close")), _pct(r.get("Expected_Return"))] for _, r in _sort(selected).head(10).iterrows()]
+              return ["📈 *PREDICTED OHLCV*"] + _table(["Stock","Open","High","Low","Close","Exp"], rows)
+          '''
+          new = '''def _prediction_table(selected):
+              if selected is None or selected.empty:
+                  return []
+              rows = [[str(r.get("Symbol","-")), _fmt(r.get("Pred_Open")), _fmt(r.get("Pred_High")), _fmt(r.get("Pred_Low")), _fmt(r.get("Pred_Close"))] for _, r in _sort(selected).head(10).iterrows()]
+              return ["📈 *PREDICTED OHLC — TOP 10*"] + _table(["Stock","Open","High","Low","Close"], rows)
+          '''
+          if old not in s: raise SystemExit('prediction block not found')
+          s = s.replace(old, new)
+
+          start = s.index('def _jump(j):')
+          end = s.index('\n\ndef _intraday', start)
+          s = s[:start] + '''def _jump(j):
+              if j is None or j.empty:
+                  return []
+              x = j.copy()
+              if "Jump_Probability" in x.columns:
+                  x["_jump_sort"] = pd.to_numeric(x["Jump_Probability"], errors="coerce")
+                  x = x.sort_values("_jump_sort", ascending=False, na_position="last", kind="mergesort")
+              rows = []
+              for _, r in x.iterrows():
+                  symbol = str(r.get("Symbol","-")).strip()
+                  cp = _num(r.get("Current_Price")); target = _num(r.get("Target_Level")); prob = _num(r.get("Jump_Probability"))
+                  if not symbol or symbol.lower() in {"nan", "none"} or cp is None or cp <= 0 or target is None or target <= 0:
+                      continue
+                  prob = max(0.0, min(100.0, prob if prob is not None else 0.0))
+                  rows.append([symbol, f"₹{_fmt(cp)}", f"₹{_fmt(target)}", _pct((target/cp-1)*100), f"{prob:.0f}%"])
+                  if len(rows) == 5:
+                      break
+              return ["🔥 *JUMP WATCH — TOP 5*"] + (_table(["Stock","CMP","Target","Upside","Prob"], rows) if rows else ["No valid jump candidates."])
+          ''' + s[end:]
+
+          start = s.index('def _portfolio(p):')
+          end = s.index('\n\ndef morning_report', start)
+          s = s[:start] + '''def _portfolio(p):
+              if not p:
+                  return []
+              rows = []
+              for x in p.get("Rows", []):
+                  if isinstance(x, dict):
+                      rows.append([x.get("Stock","-"), x.get("Quantity","-"), _decision(x.get("Decision")), x.get("Current_Price","-"), x.get("Average_Price","-"), x.get("Profit_Target","-"), x.get("Sell_Window","-")])
+              lines = ["💼 *AI PORTFOLIO MANAGER*", "10% target is based on portfolio average; Window is based on the Top-10 AI multi-horizon forecast."]
+              if rows:
+                  lines += _table(["Stock","Qty","Decision","CMP","Avg","10% Target","AI Window"], rows, max_width=18)
+              if p.get("AveragePlans"):
+                  lines += ["➕ *AVERAGING PLANS*"] + _table(["Stock","Add","CMP","NewAvg","10% Target","AI Window"], [[x.get("Stock","-"),x.get("Recommended_Qty",0),x.get("Current_Price","-"),x.get("New_Average_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","-")] for x in p["AveragePlans"]], max_width=18)
+              if p.get("SellAlerts"):
+                  lines += ["🚨 *SELL / PROFIT-BOOK ALERTS*"] + _table(["Stock","CMP","Target","When","Reason"], [[x.get("Stock","-"),x.get("Current_Price","-"),x.get("Profit_Target","-"),x.get("Sell_Window","NOW"),x.get("Reason","-")] for x in p["SellAlerts"]], max_width=18)
+              return lines
+          ''' + s[end:]
+
+          # Replace the evaluation renderer with latest-date, max-10, bucketed 3-row output.
+          start = s.index('def _evaluation_rows(evaluation):')
+          end = s.index('\n\ndef evening_report', start)
+          s = s[:start] + '''def _evaluation_rows(evaluation, market_date=None, limit=10):
+              if evaluation is None or evaluation.empty:
+                  return []
+              e = evaluation.copy()
+              if market_date is not None and "EvaluationDate" in e.columns:
+                  d = e["EvaluationDate"].astype(str).str[:10]
+                  target = str(market_date)[:10]
+                  latest = e[d == target]
+                  if not latest.empty:
+                      e = latest
+              if "EvaluationDate" in e.columns:
+                  e = e.sort_values("EvaluationDate", kind="mergesort")
+              e = e.drop_duplicates(subset=["Symbol"], keep="last").head(limit)
+              rows = []
+              for _, r in e.iterrows():
+                  symbol = str(r.get("Symbol", "-")).strip()
+                  if not symbol or symbol.lower() in {"nan", "none"}:
+                      continue
+                  bucket = _bucket_label(r.get("PriceBucket", "-"))
+                  pred = [r.get("Pred_Open"), r.get("Pred_High"), r.get("Pred_Low"), r.get("Pred_Close")]
+                  actual = [r.get("Actual_Open"), r.get("Actual_High"), r.get("Actual_Low"), r.get("Actual_Close")]
+                  diff = [_diff_pct(p, a) for p, a in zip(pred, actual)]
+                  rows.extend([
+                      [symbol, "Predicted", *[_fmt(v) for v in pred]],
+                      [symbol, "Actual", *[_fmt(v) for v in actual]],
+                      [symbol, "Difference%", *[_pct(v) for v in diff]],
+                  ])
+              return rows
+          ''' + s[end:]
+
+          s = s.replace('rows = _evaluation_rows(evaluation)', 'rows = _evaluation_rows(evaluation, market_date=market_date, limit=10)')
+          s = s.replace('lines += _table(["Stock","Bucket","Type","Open","High","Low","Close"], rows, max_width=12) if rows else ["No completed stock evaluations."]', 'lines += _table(["Stock","Type","Open","High","Low","Close"], rows, max_width=12) if rows else ["No completed stock evaluations."]')
+          s = s.replace('''return ["🔥 *JUMP WATCH*"] + _table''', '''return ["🔥 *JUMP WATCH — TOP 5*"] + _table''')
+          p.write_text(s)
+          PY
+
+          python -m py_compile src/telegram_report.py
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('src/telegram_report.py').read_text()
+          assert '\\n' not in s.splitlines()[0], 'literal newline escape corruption remains'
+          assert 'Difference%' in s
+          assert 'head(10)' in s
+          assert 'head(5)' in s or 'len(rows) == 5' in s
+          print('telegram_report.py validation OK')
+          PY
+
+          git config user.name 'stocks-ai-predictor'
+          git config user.email 'actions@github.com'
+          git add src/telegram_report.py
+          git rm -f .github/workflows/_repair_telegram_report.yml .github/workflows/_repair_telegram_report_v2.yml .github/workflows/_repair_telegram_report_final.yml 2>/dev/null || true
+          git commit -m 'Final Telegram Report Repair'
+          git push origin HEAD:main
