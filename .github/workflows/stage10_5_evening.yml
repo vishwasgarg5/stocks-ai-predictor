@@ -30,6 +30,8 @@ jobs:
           pip install -r requirements.txt
       - name: Run complete test suite
         run: python -m pytest -q tests/
+      - name: Live market-data quality gate
+        run: python -m src.live_quality_gate evening
       - name: Run Stage 10.5 evaluation and learning
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
