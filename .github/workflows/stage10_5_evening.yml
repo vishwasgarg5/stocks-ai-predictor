@@ -36,12 +36,18 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PYTHONUNBUFFERED: "1"
         run: python -m src.evening
+      - name: Run live quality controls
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          MARKET_DATE=$(date -u -d '+5 hours 30 minutes' +%F)
+          python -m src.quality_controls "$MARKET_DATE"
       - name: Commit GitHub state
         run: |
           git config user.name "stocks-ai-predictor"
           git config user.email "actions@github.com"
           git add data/stage2/
           if git diff --cached --quiet; then echo "No data changes."; exit 0; fi
-          git commit -m "Run Stage 10.5 evening evaluation"
+          git commit -m "Run Stage 10.5 evening quality controls"
           git pull --rebase origin main
           git push
