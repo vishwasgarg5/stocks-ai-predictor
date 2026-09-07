@@ -1,59 +1,58 @@
 """Persistent decision-outcome ledger used for live learning and probability calibration."""
+import hashlib
 import pandas as pd
 import numpy as np
 from .config import DECISION_LEDGER_FILE
 
-COLUMNS=["PredictionDate","EvaluationDate","Symbol","PriceBucket","Action","DecisionScore","Confidence","ExpectedReturn","PredictionUncertainty","TechnicalScore","EntryPrice","PredictedClose","ActualOpen","ActualHigh","ActualLow","ActualClose","ReturnPct","MFEPct","MAEPct","Outcome","DirectionCorrect"]
-TEXT_COLUMNS=["PredictionDate","EvaluationDate","Symbol","PriceBucket","Action","Outcome"]
+COLUMNS=["Prediction_ID","PredictionDate","EvaluationDate","Symbol","PriceBucket","Action","DecisionScore","Confidence","ExpectedReturn","PredictionUncertainty","TechnicalScore","EntryPrice","PredictedClose","ActualOpen","ActualHigh","ActualLow","ActualClose","ReturnPct","MFEPct","MAEPct","Outcome","DirectionCorrect"]
+TEXT_COLUMNS=["Prediction_ID","PredictionDate","EvaluationDate","Symbol","PriceBucket","Action","Outcome"]
 NUMERIC_COLUMNS=[c for c in COLUMNS if c not in TEXT_COLUMNS]
 
+def _legacy_id(prediction_date,symbol):
+    return "LEGACY-"+hashlib.sha256(f"{prediction_date}|{symbol}".encode()).hexdigest()[:16]
+
 def _read():
-    if not DECISION_LEDGER_FILE.exists():
-        return pd.DataFrame({c:pd.Series(dtype="object" if c in TEXT_COLUMNS else "float64") for c in COLUMNS})
+    empty=pd.DataFrame({c:pd.Series(dtype="object" if c in TEXT_COLUMNS else "float64") for c in COLUMNS})
+    if not DECISION_LEDGER_FILE.exists():return empty
     try:
         x=pd.read_csv(DECISION_LEDGER_FILE)
         for c in COLUMNS:
-            if c not in x.columns:
-                x[c]=pd.Series([np.nan]*len(x),index=x.index,dtype="object" if c in TEXT_COLUMNS else "float64")
-        for c in TEXT_COLUMNS:
-            x[c]=x[c].fillna("").astype("string")
-        for c in NUMERIC_COLUMNS:
-            x[c]=pd.to_numeric(x[c],errors="coerce")
+            if c not in x.columns:x[c]=pd.Series([np.nan]*len(x),index=x.index,dtype="object" if c in TEXT_COLUMNS else "float64")
+        missing=x["Prediction_ID"].isna()|x["Prediction_ID"].astype(str).isin(["","nan","None"])
+        if missing.any():x.loc[missing,"Prediction_ID"]=[_legacy_id(d,s) for d,s in zip(x.loc[missing,"PredictionDate"],x.loc[missing,"Symbol"])]
+        for c in TEXT_COLUMNS:x[c]=x[c].fillna("").astype("string")
+        for c in NUMERIC_COLUMNS:x[c]=pd.to_numeric(x[c],errors="coerce")
         return x[COLUMNS]
-    except Exception:
-        return pd.DataFrame({c:pd.Series(dtype="object" if c in TEXT_COLUMNS else "float64") for c in COLUMNS})
+    except Exception:return empty
 
 def save_decisions(predictions,prediction_date):
     if predictions is None or predictions.empty:return
     rows=[]
     for _,r in predictions.iterrows():
-        rows.append({"PredictionDate":str(prediction_date),"EvaluationDate":"","Symbol":str(r.get("Symbol","")),"PriceBucket":str(r.get("PriceBucket","-")),"Action":str(r.get("Action","HOLD")),"DecisionScore":float(r.get("FinalDecisionScore",0) or 0),"Confidence":float(r.get("CalibratedConfidence",r.get("Confidence",0)) or 0),"ExpectedReturn":float(r.get("Expected_Return",0) or 0),"PredictionUncertainty":float(r.get("PredictionUncertaintyPct",0) or 0),"TechnicalScore":float(r.get("TechnicalScore",50) or 50),"EntryPrice":float(r.get("Current_Close",r.get("Current_Price",0)) or 0),"PredictedClose":float(r.get("Pred_Close",0) or 0),"ActualOpen":np.nan,"ActualHigh":np.nan,"ActualLow":np.nan,"ActualClose":np.nan,"ReturnPct":np.nan,"MFEPct":np.nan,"MAEPct":np.nan,"Outcome":"OPEN","DirectionCorrect":np.nan})
-    old=_read();new=pd.DataFrame(rows,columns=COLUMNS);x=pd.concat([old,new],ignore_index=True);x=x.drop_duplicates(["PredictionDate","Symbol"],keep="last");DECISION_LEDGER_FILE.parent.mkdir(parents=True,exist_ok=True);x.to_csv(DECISION_LEDGER_FILE,index=False)
+        symbol=str(r.get("Symbol",""));pid=str(r.get("Prediction_ID") or _legacy_id(prediction_date,symbol))
+        rows.append({"Prediction_ID":pid,"PredictionDate":str(prediction_date),"EvaluationDate":"","Symbol":symbol,"PriceBucket":str(r.get("PriceBucket","-")),"Action":str(r.get("Action","HOLD")),"DecisionScore":float(r.get("FinalDecisionScore",0) or 0),"Confidence":float(r.get("CalibratedConfidence",r.get("Confidence",0)) or 0),"ExpectedReturn":float(r.get("Expected_Return",0) or 0),"PredictionUncertainty":float(r.get("PredictionUncertaintyPct",0) or 0),"TechnicalScore":float(r.get("TechnicalScore",50) or 50),"EntryPrice":float(r.get("Current_Close",r.get("Current_Price",0)) or 0),"PredictedClose":float(r.get("Pred_Close",0) or 0),"ActualOpen":np.nan,"ActualHigh":np.nan,"ActualLow":np.nan,"ActualClose":np.nan,"ReturnPct":np.nan,"MFEPct":np.nan,"MAEPct":np.nan,"Outcome":"OPEN","DirectionCorrect":np.nan})
+    old=_read();new=pd.DataFrame(rows,columns=COLUMNS);x=pd.concat([old,new],ignore_index=True);x=x.drop_duplicates("Prediction_ID",keep="last");DECISION_LEDGER_FILE.parent.mkdir(parents=True,exist_ok=True);x.to_csv(DECISION_LEDGER_FILE,index=False)
 
-def evaluate_decisions(prediction_date,evaluation_date,data_map):
+def evaluate_decisions(prediction_date,evaluation_date,data_map,prediction_ids=None):
     x=_read()
     if x.empty:return pd.DataFrame()
+    allowed=set(str(v) for v in prediction_ids) if prediction_ids else None
     mask=(x["PredictionDate"].astype(str)==str(prediction_date))&(x["Outcome"].astype(str)=="OPEN")
+    if allowed is not None:mask &= x["Prediction_ID"].astype(str).isin(allowed)
     rows=[]
     for idx,r in x.loc[mask].iterrows():
         df=data_map.get(str(r["Symbol"]))
         if df is None or df.empty:continue
         dates=pd.DatetimeIndex(df.index).normalize();hits=np.where(dates==pd.Timestamp(evaluation_date))[0]
         if len(hits)==0:continue
-        a=df.iloc[int(hits[0])]
-        entry=float(r["EntryPrice"]);close=float(a["Close"]);high=float(a["High"]);low=float(a["Low"])
+        a=df.iloc[int(hits[0])];entry=float(r["EntryPrice"]);close=float(a["Close"]);high=float(a["High"]);low=float(a["Low"])
         if entry<=0:continue
         ret=(close/entry-1)*100;mfe=(high/entry-1)*100;mae=(low/entry-1)*100;action=str(r["Action"]).upper()
         outcome="WIN" if (action=="BUY" and ret>0) or (action=="AVOID" and ret<0) else ("LOSS" if (action=="BUY" and ret<0) or (action=="AVOID" and ret>0) else "NEUTRAL")
         pred_close=float(r["PredictedClose"]) if pd.notna(r["PredictedClose"]) else np.nan
         direction_correct=float((ret>0 and pred_close>entry) or (ret<0 and pred_close<entry) or (ret==0 and pred_close==entry)) if np.isfinite(pred_close) else np.nan
-        # EvaluationDate is explicitly a string column; numeric OHLC/outcome fields remain numeric.
-        x.at[idx,"EvaluationDate"]=str(evaluation_date)
-        x.at[idx,"ActualOpen"]=float(a["Open"]);x.at[idx,"ActualHigh"]=high;x.at[idx,"ActualLow"]=low;x.at[idx,"ActualClose"]=close
-        x.at[idx,"ReturnPct"]=ret;x.at[idx,"MFEPct"]=mfe;x.at[idx,"MAEPct"]=mae;x.at[idx,"Outcome"]=outcome;x.at[idx,"DirectionCorrect"]=direction_correct
-        rows.append(x.loc[idx].to_dict())
-    x.to_csv(DECISION_LEDGER_FILE,index=False)
-    return pd.DataFrame(rows,columns=COLUMNS)
+        x.at[idx,"EvaluationDate"]=str(evaluation_date);x.at[idx,"ActualOpen"]=float(a["Open"]);x.at[idx,"ActualHigh"]=high;x.at[idx,"ActualLow"]=low;x.at[idx,"ActualClose"]=close;x.at[idx,"ReturnPct"]=ret;x.at[idx,"MFEPct"]=mfe;x.at[idx,"MAEPct"]=mae;x.at[idx,"Outcome"]=outcome;x.at[idx,"DirectionCorrect"]=direction_correct;rows.append(x.loc[idx].to_dict())
+    x.to_csv(DECISION_LEDGER_FILE,index=False);return pd.DataFrame(rows,columns=COLUMNS)
 
 def summary(days=30):
     x=_read();x=x[x["Outcome"].astype(str)!="OPEN"].copy()
