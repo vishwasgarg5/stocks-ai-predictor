@@ -1,8 +1,9 @@
 from pathlib import Path
 import os
 import re
+import hashlib
 import pandas as pd
-from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,JUMP_METRICS_FILE,INTRADAY_METRICS_FILE
+from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,JUMP_METRICS_FILE,INTRADAY_METRICS_FILE,MODEL_VERSION,STAGE_NAME,TRANSACTION_COST_BPS,SLIPPAGE_BPS
 from .utils import write_json
 
 def prediction_path(prediction_date): return PREDICTIONS_DIR / f"predictions_{prediction_date}.csv"
@@ -10,6 +11,32 @@ def evaluation_path(market_date): return EVALUATIONS_DIR / f"evaluation_{market_
 def jump_path(prediction_date): return JUMP_DIR / f"jump_{prediction_date}.csv"
 def intraday_path(prediction_date): return INTRADAY_DIR / f"intraday_{prediction_date}.csv"
 def morning_report_path(prediction_date): return PREDICTIONS_DIR / f"morning_report_{prediction_date}.json"
+
+def _prediction_id(run_date,symbol,cutoff_date,model_version):
+    raw=f"{run_date}|{symbol}|{cutoff_date}|{model_version}".encode()
+    return "P"+hashlib.sha256(raw).hexdigest()[:16]
+
+def _baseline_columns(df, metadata=None):
+    x=df.copy()
+    meta=metadata or {}
+    run_date=meta.get("PredictionDate",x.get("PredictionDate",pd.Series([""])).iloc[0] if len(x) else "")
+    cutoff=meta.get("DataCutoff",x.get("DataCutoff",pd.Series([run_date])).iloc[0] if len(x) else run_date)
+    version=meta.get("ModelVersion",MODEL_VERSION)
+    if "Symbol" in x.columns:
+        x["Prediction_ID"]=[_prediction_id(run_date,str(s),cutoff,version) for s in x["Symbol"].astype(str)]
+    x["Run_Date"]=str(run_date);x["Cutoff_Date"]=str(cutoff);x["Model_Version"]=str(version)
+    # Previous close is the explicit naive baseline. For OHLC it is deliberately
+    # repeated across fields; this is the no-skill benchmark for a close-anchored forecast.
+    baseline=None
+    for c in ["Previous_Close","Prev_Close","Baseline_Close","Current_Close","Current_Price"]:
+        if c in x.columns:
+            baseline=pd.to_numeric(x[c],errors="coerce");break
+    if baseline is not None:
+        for target in ["Open","High","Low","Close"]: x[f"Baseline_{target}"]=baseline
+        x["Baseline_Close"]=baseline
+        cost_pct=(float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS))/100.0
+        x["Baseline_Cost_Pct"]=cost_pct
+    return x
 
 def prediction_exists(prediction_date):
     path=prediction_path(prediction_date)
@@ -25,12 +52,22 @@ def morning_report_sent(prediction_date):
 def mark_morning_report_sent(prediction_date): write_json(morning_report_path(prediction_date),{"PredictionDate":str(prediction_date),"ReportSent":True})
 
 def save_predictions(df,prediction_date,metadata=None):
-    path=prediction_path(prediction_date);tmp=path.with_suffix(".tmp");df.to_csv(tmp,index=False);tmp.replace(path)
+    metadata=dict(metadata or {});metadata.setdefault("PredictionDate",str(prediction_date));metadata.setdefault("ModelVersion",MODEL_VERSION);metadata.setdefault("Stage",STAGE_NAME)
+    enriched=_baseline_columns(df,metadata)
+    path=prediction_path(prediction_date);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
+    metadata["PredictionLedgerVersion"]="v2";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist() if "Prediction_ID" in enriched else []
     if metadata is not None:write_json(path.with_suffix(".json"),metadata)
     return path
 
 def load_predictions(prediction_date):
-    path=prediction_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    path=prediction_path(prediction_date)
+    if not path.exists(): return pd.DataFrame()
+    try:
+        df=pd.read_csv(path)
+        if "Prediction_ID" not in df.columns: df=_baseline_columns(df,{"PredictionDate":str(prediction_date)})
+        return df
+    except Exception:return pd.DataFrame()
+
 def save_jump_predictions(df,prediction_date):path=jump_path(prediction_date);df.to_csv(path,index=False);return path
 def save_intraday_predictions(df,prediction_date):path=intraday_path(prediction_date);df.to_csv(path,index=False);return path
 def load_jump_predictions(prediction_date):path=jump_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
@@ -46,7 +83,11 @@ def latest_prediction_date(on_or_before=None):
     return max(dates) if dates else None
 
 def evaluation_exists(market_date):return evaluation_path(market_date).exists()
-def save_evaluation(df,market_date):path=evaluation_path(market_date);df.to_csv(path,index=False);return path
+def save_evaluation(df,market_date):
+    path=evaluation_path(market_date);x=df.copy()
+    if "Prediction_ID" not in x.columns and {"PredictionDate","Symbol"}.issubset(x.columns):
+        x["Prediction_ID"]=[_prediction_id(r.PredictionDate,r.Symbol,r.get("Cutoff_Date",r.PredictionDate),r.get("Model_Version",MODEL_VERSION)) for _,r in x.iterrows()]
+    path.parent.mkdir(parents=True,exist_ok=True);x.to_csv(path,index=False);return path
 
 def append_daily_metrics(row):
     if DAILY_METRICS_FILE.exists():
