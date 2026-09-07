@@ -219,9 +219,10 @@ def _best_pick_table(selected):
 
 
 def _prediction_table(selected):
+    """Morning OHLC display: exactly the top 10 selected stocks, OHLC only."""
     if selected is None or selected.empty: return []
-    rows = [[str(r.get("Symbol","-")), _fmt(r.get("Pred_Open")), _fmt(r.get("Pred_High")), _fmt(r.get("Pred_Low")), _fmt(r.get("Pred_Close")), _pct(r.get("Expected_Return"))] for _, r in _sort(selected).head(10).iterrows()]
-    return ["📈 *PREDICTED OHLCV*"] + _table(["Stock","Open","High","Low","Close","Exp"], rows)
+    rows = [[str(r.get("Symbol","-")), _fmt(r.get("Pred_Open")), _fmt(r.get("Pred_High")), _fmt(r.get("Pred_Low")), _fmt(r.get("Pred_Close"))] for _, r in _sort(selected).head(10).iterrows()]
+    return ["📈 *PREDICTED OHLC — TOP 10*", *_table(["Stock","Open","High","Low","Close"], rows)]
 
 
 def _horizon_table(selected):
@@ -282,20 +283,62 @@ def _diff_pct(predicted, actual):
         return None
 
 
-def _evaluation_rows(evaluation):
-    if evaluation is None or evaluation.empty: return []
-    rows = []
-    for _, r in evaluation.iterrows():
-        symbol, bucket = str(r.get("Symbol","-")), _bucket_label(r.get("PriceBucket","-"))
-        values = {
-            "Predicted": [r.get("Pred_Open"),r.get("Pred_High"),r.get("Pred_Low"),r.get("Pred_Close")],
-            "Actual": [r.get("Actual_Open"),r.get("Actual_High"),r.get("Actual_Low"),r.get("Actual_Close")],
-            "Diff%": [_diff_pct(r.get("Pred_Open"),r.get("Actual_Open")),_diff_pct(r.get("Pred_High"),r.get("Actual_High")),_diff_pct(r.get("Pred_Low"),r.get("Actual_Low")),_diff_pct(r.get("Pred_Close"),r.get("Actual_Close"))],
-        }
-        for kind, vals in values.items():
-            vals = [_pct(v) for v in vals] if kind == "Diff%" else [_fmt(v) for v in vals]
-            rows.append([symbol,bucket,kind,*vals])
-    return rows
+def _evaluation_bucket_sections(evaluation, max_stocks=10, max_per_bucket=6):
+    """Return evening OHLC evaluation grouped by price bucket, 3 rows per stock.
+
+    The full evaluation dataframe remains untouched for model learning. This is
+    presentation-only: Telegram shows at most 10 unique stocks and at most 6
+    stocks in any one price bucket.
+    """
+    if evaluation is None or evaluation.empty:
+        return []
+    x = evaluation.copy()
+    if "Symbol" not in x.columns:
+        return []
+    if "PriceBucket" not in x.columns:
+        x["PriceBucket"] = "-"
+    x["Symbol"] = x["Symbol"].astype(str)
+    x["PriceBucket"] = x["PriceBucket"].fillna("-").astype(str)
+
+    # Keep the first occurrence of each stock so a malformed/duplicate
+    # evaluation file cannot multiply the Telegram rows.
+    x = x.drop_duplicates(subset=["Symbol"], keep="first")
+
+    # Preserve the prediction/evaluation order, then enforce both limits.
+    chosen = []
+    bucket_counts = {}
+    for _, row in x.iterrows():
+        bucket = str(row.get("PriceBucket", "-"))
+        if bucket_counts.get(bucket, 0) >= int(max_per_bucket):
+            continue
+        chosen.append(row)
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        if len(chosen) >= int(max_stocks):
+            break
+    if not chosen:
+        return []
+
+    display = pd.DataFrame(chosen)
+    lines = []
+    for bucket in _ordered_price_buckets(display["PriceBucket"]):
+        g = display[display["PriceBucket"].astype(str) == bucket]
+        if g.empty:
+            continue
+        label = _bucket_label(bucket, g)
+        lines += [f"💎 *₹ {label}* | MAX 6"]
+        rows = []
+        for _, r in g.iterrows():
+            symbol = str(r.get("Symbol", "-"))
+            predicted = [r.get("Pred_Open"), r.get("Pred_High"), r.get("Pred_Low"), r.get("Pred_Close")]
+            actual = [r.get("Actual_Open"), r.get("Actual_High"), r.get("Actual_Low"), r.get("Actual_Close")]
+            diff = [_diff_pct(p, a) for p, a in zip(predicted, actual)]
+            rows.extend([
+                [symbol, "Predicted", *[_fmt(v) for v in predicted]],
+                [symbol, "Actual", *[_fmt(v) for v in actual]],
+                [symbol, "Difference%", *[_pct(v) for v in diff]],
+            ])
+        lines += _table(["Stock", "Type", "Open", "High", "Low", "Close"], rows, max_width=12)
+    return lines
 
 
 def evening_report(market_date, evaluation, metrics, retraining, **kwargs):
@@ -316,11 +359,11 @@ def evening_report(market_date, evaluation, metrics, retraining, **kwargs):
         f"Open MAPE: {_pct(metrics.get('OpenMAPE'))} | High MAPE: {_pct(metrics.get('HighMAPE'))}",
         f"Low MAPE: {_pct(metrics.get('LowMAPE'))} | Close MAPE: {_pct(metrics.get('CloseMAPE'))}",
         f"Accuracy: Overall {_accuracy(overall_acc)} | Close {_accuracy(close_acc)} | Direction {_accuracy(metrics.get('DirectionAccuracy'))}",
-        _scan(scan), _SECTION, "📋 *PREDICTION vs ACTUAL*",
-        "Predicted → Actual → signed Difference% for every OHLC line item.",
+        _scan(scan), _SECTION, "📋 *PREDICTION vs ACTUAL — TOP 10*",
+        "Only the 10 morning-report stocks are shown. Each stock has exactly 3 rows: Predicted → Actual → Difference%.",
     ]
-    rows = _evaluation_rows(evaluation)
-    lines += _table(["Stock","Bucket","Type","Open","High","Low","Close"], rows, max_width=12) if rows else ["No completed stock evaluations."]
+    evaluation_sections = _evaluation_bucket_sections(evaluation, max_stocks=10, max_per_bucket=6)
+    lines += evaluation_sections if evaluation_sections else ["No completed stock evaluations."]
     lines += [_SECTION, "🎯 *PRICE-BUCKET ACCURACY*"]
     bucket_rows = [[_bucket_label(k),_accuracy(v)] for k,v in bucket_metrics.items()]
     lines += _table(["Price Bucket","Accuracy"], bucket_rows) if bucket_rows else ["No bucket metrics."]
