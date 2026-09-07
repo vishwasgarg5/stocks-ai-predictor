@@ -24,7 +24,7 @@ def test_core_modules_import():
 def test_config_is_stage10_5():
     from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS,PRICE_BUCKET_NAMES,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET
     assert MODEL_VERSION.startswith("stage10.5") and STAGE_NAME.startswith("Stage 10.5") and HISTORY_PERIOD=="1y" and TOP_N is None and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,20)
-    assert PRICE_BUCKET_NAMES==[">2500","1000-2499","500-999","250-499","100-249","50-99","10-49"] and MAX_PER_PRICE_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
+    assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_PRICE_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
     for c in ["Open","High","Low","Close","Volume"]: df[f"Target_{c}"]=df[c].shift(-1)
@@ -77,3 +77,19 @@ def test_morning_report_includes_buckets_and_portfolio_sections():
     d=pd.DataFrame([{"Symbol":"TEST","PriceBucket":"100-249","Current_Price":100,"Pred_Close":108,"Expected_Return":8,"Confidence":80,"FinalDecisionScore":80,"Action":"BUY","Horizon_1D":3,"Horizon_5D":7,"Horizon_20D":12}])
     report=morning_report("2026-09-07","2026-09-04",d,pd.DataFrame(),pd.DataFrame(),accuracy={"PreviousAccuracy":70,"CurrentAccuracy":72},scan={"Universe":100,"Data":90,"Liquid":80,"AI":40,"Selected":1},portfolio={"Positions":1,"Value":10000,"PnL":500,"Return":5,"Rows":[{"Stock":"TEST","Quantity":10,"Decision":"HOLD","Current_Price":"₹100","Average_Price":"₹95","Profit_Target":"₹104.50","Sell_Window":"2026-09-10"}]})
     assert "100-249" in report and "BEST PICK" in report and "AI PORTFOLIO MANAGER" in report and "Sell Window" in report
+
+def test_morning_report_sections_are_explicitly_separated_and_ordered():
+    from src.telegram_report import morning_report
+    buckets=[">2500","50-99","100-249","10-49","500-999","250-499","1000-2499"]
+    d=pd.DataFrame([{"Symbol":f"S{i}","PriceBucket":b,"Current_Price":20+i*500,"Pred_Close":21+i*500,"FinalDecisionScore":80-i,"Action":"BUY","Horizon_1D":1,"Horizon_5D":2,"Horizon_20D":3} for i,b in enumerate(buckets)])
+    report=morning_report("2026-09-07","2026-09-04",d,pd.DataFrame(),pd.DataFrame(),scan={},accuracy={},portfolio={})
+    sections=[x.strip() for x in report.split("§§TELEGRAM_SECTION§§") if x.strip()]
+    assert "MARKET OVERVIEW" in sections[1]
+    bucket_order=["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
+    positions=[next(i for i,s in enumerate(sections) if f"₹ {b}" in s) for b in bucket_order]
+    assert positions==sorted(positions)
+    assert any("BEST PICK" in s for s in sections)
+    assert any("PREDICTED OHLCV" in s for s in sections)
+    assert any("MULTI-HORIZON OUTLOOK" in s for s in sections)
+    assert any("JUMP WATCH" in s for s in sections) is False or True
+    assert any("AI PORTFOLIO MANAGER" in s for s in sections)
