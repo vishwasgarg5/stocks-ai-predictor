@@ -20,11 +20,13 @@ from .config import STAGE4_SECTOR_MAP_FILE
 from .utils import clamp
 
 PRICE_BUCKETS = [
-    ("B1", ">1000", 1000.0, float("inf")),
-    ("B2", "500-999", 500.0, 1000.0),
-    ("B3", "100-499", 100.0, 500.0),
-    ("B4", "50-99", 50.0, 100.0),
-    ("B5", "10-49", 10.0, 50.0),
+    ("B1", ">2500", 2500.0, float("inf")),
+    ("B2", "1000-2499", 1000.0, 2500.0),
+    ("B3", "500-999", 500.0, 1000.0),
+    ("B4", "250-499", 250.0, 500.0),
+    ("B5", "100-249", 100.0, 250.0),
+    ("B6", "50-99", 50.0, 100.0),
+    ("B7", "10-49", 10.0, 50.0),
 ]
 
 
@@ -100,8 +102,8 @@ def add_stage4_context(candidates, data_map, regime):
     return df
 
 
-def select_price_bucket_candidates(candidates, per_bucket=2):
-    """Keep up to two strongest stocks from every price bucket."""
+def select_price_bucket_candidates(candidates, per_bucket=6):
+    """Keep up to six strongest stocks from every price bucket."""
     if candidates is None or candidates.empty: return candidates
     pieces=[]
     for _, group in candidates.groupby("PriceBucket", sort=False):
