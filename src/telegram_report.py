@@ -122,6 +122,30 @@ def _accuracy(v):
         return "-"
 
 
+
+def _num(v, default=None):
+    try:
+        x = float(v)
+        return default if not pd.notna(x) else x
+    except (TypeError, ValueError):
+        return default
+
+
+def _decision(v):
+    """Compact portfolio/report decision for Telegram mobile display."""
+    s = str(v or "-").strip().upper()
+    if s in {"SELL / PROFIT BOOK", "SELL / EXIT", "SELL", "PROFIT BOOK", "EXIT"} or s.startswith("SELL"):
+        return "SELL"
+    if s in {"HOLD / RECOVERY", "HOLD", "RECOVERY"} or s.startswith("HOLD"):
+        return "HOLD"
+    if s in {"DATA WAIT", "WAIT"} or s.startswith("DATA WAIT"):
+        return "WAIT"
+    if s in {"AVG", "AVERAGE", "AVERAGING"} or s.startswith("AVG"):
+        return "AVG"
+    if s in {"BUY", "ADD"} or s.startswith("BUY"):
+        return "BUY"
+    return s if s else "-"
+
 def _table(headers, rows, max_width=12):
     if not rows:
         return []
