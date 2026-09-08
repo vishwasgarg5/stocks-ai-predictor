@@ -33,7 +33,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import re
-
           p=Path("src/morning_runner.py")
           s=p.read_text()
           s=s.replace("for horizon in [1,3,5,7,20]:","for horizon in [1,3,5,7,10,20]:",1)
@@ -41,6 +40,8 @@ jobs:
           s=s.replace("df,s=portfolio_snapshot();","df,s=portfolio_snapshot(cutoff,variant);",1)
           s=s.replace("portfolio=_portfolio_payload(),","portfolio=_portfolio_payload(cutoff,meta.get(\"ModelVariant\",\"A\")),",1)
           s=s.replace("portfolio=_portfolio_payload());","portfolio=_portfolio_payload(cutoff_date,variant));",1)
+          s=s.replace("min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0","min_score=55.0,min_confidence=55.0,min_trade_confidence=55.0",1)
+          s=s.replace('"MultiHorizons":[1,3,5,7,20]','"MultiHorizons":[1,3,5,7,10,20]',1)
           p.write_text(s)
 
           p=Path("src/market_data.py")
@@ -57,25 +58,24 @@ jobs:
 
           p=Path("src/portfolio_report.py")
           s=p.read_text()
-          if "Independent AI coverage" not in s and "independent AI coverage" not in s: raise SystemExit("Portfolio AI module not installed")
+          if "independent AI coverage" not in s:raise SystemExit("Portfolio AI module not installed")
           p.write_text(s)
 
           p=Path("src/telegram_report.py")
-          lines=p.read_text().splitlines()
-          out=[];fixed=False
+          lines=p.read_text().splitlines();out=[];fixed=False
           for line in lines:
               if "sections.append(" in line and "Difference%" in line:
                   indent=line[:len(line)-len(line.lstrip())]
                   out.append(indent+'table=_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]]])')
                   out.append(indent+'sections.append("\\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get(\'Symbol\',\'-\')).strip()}*",*table]))')
                   fixed=True
-              else: out.append(line)
+              else:out.append(line)
           if not fixed:raise SystemExit("Evaluation table syntax line not found")
           p.write_text("\n".join(out)+"\n")
           PY
           python -m py_compile src/telegram_report.py src/morning_runner.py src/market_data.py src/portfolio_report.py
       - name: Run hardening, portfolio and market-outlook tests
-        run: python -m pytest -q tests/test_stage10_5_hardening.py tests/test_portfolio_report_schema.py tests/test_market_outlook.py
+        run: python -m pytest -q tests/test_stage10_5.py tests/test_stage10_5_hardening.py tests/test_portfolio_report_schema.py tests/test_market_outlook.py
       - name: Live market-data quality gate
         run: python -m src.live_quality_gate morning
       - name: Run Stage 10.5 morning prediction
@@ -90,6 +90,6 @@ jobs:
           git config user.email "actions@github.com"
           git add src/morning_runner.py src/market_data.py src/telegram_report.py src/portfolio_report.py data/stage2/
           if git diff --cached --quiet; then echo "No data/source changes."; exit 0; fi
-          git commit -m "Wire independent portfolio AI into morning report"
+          git commit -m "Backfill qualified top 10 and persist 10D metadata"
           git pull --rebase origin main
           git push
