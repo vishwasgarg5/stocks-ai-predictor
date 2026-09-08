@@ -42,12 +42,18 @@ jobs:
           from pathlib import Path
           p = Path("src/portfolio_report.py")
           text = p.read_text(encoding="utf-8")
-          if "alias_map={\"AI_Target\":\"Pred_Close\"" not in text:
-              marker = "    return out.merge(pred[keep].drop_duplicates(\"Ticker\",keep=\"last\"),on=\"Ticker\",how=\"left\"),date"
+          marker = '    return out.merge(pred[keep].drop_duplicates("Ticker",keep="last"),on="Ticker",how="left"),date'
+          if 'alias_map={"AI_Target":"Pred_Close"' not in text:
               if marker not in text:
                   raise SystemExit("portfolio_report.py compatibility insertion point not found")
-              patch = '''    # Backward-compatible portfolio AI schema aliases. Canonical prediction fields remain authoritative.\n    alias_map={"AI_Target":"Pred_Close","AI_Open":"Pred_Open","AI_High":"Pred_High","AI_Low":"Pred_Low"}\n    for alias,source in alias_map.items():\n        if source in merged.columns:\n            merged[alias]=pd.to_numeric(merged[source],errors="coerce")\n'''
-              text = text.replace(marker, patch + marker, 1)
+              replacement = '''    merged=out.merge(pred[keep].drop_duplicates("Ticker",keep="last"),on="Ticker",how="left")
+    # Backward-compatible portfolio AI schema aliases. Canonical prediction fields remain authoritative.
+    alias_map={"AI_Target":"Pred_Close","AI_Open":"Pred_Open","AI_High":"Pred_High","AI_Low":"Pred_Low"}
+    for alias,source in alias_map.items():
+        if source in merged.columns:
+            merged[alias]=pd.to_numeric(merged[source],errors="coerce")
+    return merged,date'''
+              text = text.replace(marker, replacement, 1)
               p.write_text(text, encoding="utf-8")
           PY
       - name: Stage 28 contract and regression tests
