@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from .config import TRANSACTION_COST_BPS,SLIPPAGE_BPS,MIN_NET_RETURN_PCT,BENCHMARK_TOLERANCE_PCT,TARGET_HIT_LEVELS,TARGET_HIT_MIN_SAMPLES,EVALUATIONS_DIR,STOCK_RELIABILITY_FILE,DECISION_LEDGER_FILE
-HORIZONS=(1,3,5,7,20)
+HORIZONS=(1,3,5,7,10,20)
 def _num(v,d=50.0):
     try:
         x=float(v);return d if not np.isfinite(x) else x
