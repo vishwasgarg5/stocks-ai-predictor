@@ -20,10 +20,10 @@ def test_core_modules_import():
     for name in CORE_MODULES:
         try: importlib.import_module(name)
         except Exception as exc: failures.append(f"{name}: {type(exc).__name__}: {exc}")
-    assert not failures,"Stage 10.5 import failures:\n"+"\n".join(failures)
-def test_config_is_stage10_5():
+    assert not failures,"Stage 28 import failures:\n"+"\n".join(failures)
+def test_config_is_stage28():
     from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS,PRICE_BUCKET_NAMES,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,PREDICTION_TOP_N
-    assert MODEL_VERSION.startswith("stage10.5") and STAGE_NAME.startswith("Stage 10.5") and HISTORY_PERIOD=="3y" and TOP_N==10 and PREDICTION_TOP_N==10 and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)
+    assert MODEL_VERSION.startswith("stage28") and STAGE_NAME.startswith("Stage 28") and HISTORY_PERIOD=="3y" and TOP_N==10 and PREDICTION_TOP_N==10 and MAX_UNIVERSE==0 and tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)
     assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_PRICE_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
@@ -47,6 +47,10 @@ def test_direction_return_conflict_reduces_trade_confidence():
     from src.selection import calculate_trade_confidence
     base={"Confidence":95,"Direction_Confidence":95,"ReliabilityScore":80,"Direction":"UP","MultiHorizonExpectedReturn":5,"Horizon_1D":5,"Horizon_3D":5,"Horizon_5D":5,"Horizon_7D":5,"Horizon_20D":5}
     assert calculate_trade_confidence({**base,"Expected_Return":5})>calculate_trade_confidence({**base,"Expected_Return":-5})
+def test_down_direction_is_never_selected():
+    from src.selection import select_top_stocks
+    row={"Symbol":"DOWN","TechnicalScore":100,"Expected_Return":10,"Confidence":100,"Direction_Confidence":100,"Direction":"DOWN","PriceBucket":"B1","MultiHorizonExpectedReturn":10}
+    assert select_top_stocks(pd.DataFrame([row]),top_n=10).empty
 def test_price_buckets_are_current():
     from src.stage4_engine import price_bucket
     assert [price_bucket(x)[0] for x in [3000,1500,750,300,150,75,25,9]]==["B1","B2","B3","B4","B5","B6","B7","OUT"]
@@ -67,14 +71,14 @@ def test_final_manifest_contract():
     from src.final_intelligence import final_stage_manifest
     m=final_stage_manifest(); assert "Stage10.5" in m and "Stage10.4" not in m and "Validation" in m and "Abstention" in m and "Learning" in m
 def test_portfolio_engine_has_ai_target_chain():
-    from src.portfolio_report import _attach_predictions,_average_plan
+    from src.portfolio_report import _attach_predictions,_plan_row
     pred=pd.DataFrame([{"Symbol":"TEST.NS","Pred_Close":120,"Pred_Open":118,"Pred_High":123,"Pred_Low":116,"Confidence":85,"Action":"BUY"}])
     base=pd.DataFrame([{"Stock":"TEST.NS","Ticker":"TEST.NS","Quantity":100.,"Average_Price":100.,"Reported_PnL":np.nan,"Reported_Return":np.nan}])
     import src.portfolio_report as pr
     old=pr._latest_predictions;pr._latest_predictions=lambda:(pred,"2026-09-04")
     try:
         out,date=_attach_predictions(base);assert date=="2026-09-04" and float(out.loc[0,"AI_Target"])==120 and float(out.loc[0,"AI_High"])==123
-        out["Current_Price"]=90.;out["PredictionDate"]=date;out["CalibratedConfidence"]=85.;row=_average_plan(out.iloc[0].copy());assert row["Profit_Target_Price"]==110 and row["Projected_Return_At_AI_Target"]>10
+        row=pr._plan_row(base.iloc[0],pred.iloc[0],date);assert round(float(row["Profit_Target_Price"]),10)==110 and float(row["Projected_Return_At_AI_Target"])==20
     finally:pr._latest_predictions=old
 def test_morning_report_includes_buckets_and_portfolio_sections():
     from src.telegram_report import morning_report
@@ -112,7 +116,6 @@ def test_telegram_html_escaping_and_formatting():
     assert "ABC_TEST.NS [WATCH] -2.5% | ₹123.45" in rendered
     assert "<pre>A_B [C] &lt;D&gt;</pre>" in rendered
     assert "<pre>" in rendered and "```" not in rendered
-
 def test_prediction_universe_is_capped_at_ten():
     from src.config import PREDICTION_TOP_N,TOP_N
     assert PREDICTION_TOP_N==10 and TOP_N==10
