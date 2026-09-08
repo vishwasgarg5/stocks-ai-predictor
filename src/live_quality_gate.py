@@ -26,14 +26,34 @@ def _fail(failed: dict[str, list[str]], label: str) -> None:
     )
 
 
-def morning_gate() -> dict:
-    """Validate the broad market universe without blocking on isolated bad tickers.
+def _clip_to_cutoff(data_map: dict, cutoff_date) -> dict:
+    """Remove rows after the immutable prediction cutoff before validation.
 
-    NSE feeds can contain stale/corrupt OHLC rows for individual symbols.  The
-    morning predictor already has per-symbol failure isolation, so the gate
-    should only block when the usable universe itself is too small.  This keeps
-    one bad ticker from preventing the entire daily prediction run.
+    Yahoo/repository caches can legitimately contain a newer session than the
+    morning prediction cutoff.  Those rows must never enter the model, but
+    they also should not invalidate an otherwise usable symbol.  Validation is
+    therefore performed on the exact data slice the predictor is allowed to
+    see.
     """
+    if cutoff_date is None:
+        return data_map
+    cutoff = __import__("pandas").Timestamp(cutoff_date).date()
+    clipped = {}
+    for symbol, df in (data_map or {}).items():
+        if df is None or df.empty:
+            clipped[symbol] = df
+            continue
+        try:
+            x = df.copy()
+            x = x[x.index.map(lambda value: __import__("pandas").Timestamp(value).date() <= cutoff)]
+            clipped[symbol] = x
+        except Exception:
+            clipped[symbol] = df
+    return clipped
+
+
+def morning_gate() -> dict:
+    """Validate the broad market universe without blocking on isolated bad tickers."""
     if not is_weekday():
         return {"Status": "SKIP_WEEKEND"}
     universe = load_universe()
@@ -43,6 +63,9 @@ def morning_gate() -> dict:
     if cutoff is None:
         raise RuntimeError("LIVE_DATA_QUALITY_FAILED: no completed market cutoff")
 
+    # Enforce the cutoff before quality validation so cached future sessions
+    # cannot poison valid symbols or leak into the morning model.
+    raw = _clip_to_cutoff(raw, cutoff)
     passed, failed = validate_universe(raw, cutoff_date=cutoff, min_rows=30)
     if len(passed) < 20:
         raise RuntimeError(
