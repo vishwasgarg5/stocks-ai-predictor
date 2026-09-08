@@ -14,15 +14,26 @@ from .market_data import (
 from .utils import is_weekday
 
 
+def _sample(failed: dict[str, list[str]]) -> str:
+    return ", ".join(f"{s}:{'|'.join(e)}" for s, e in list(failed.items())[:10])
+
+
 def _fail(failed: dict[str, list[str]], label: str) -> None:
     if not failed:
         return
-    sample = ", ".join(f"{s}:{'|'.join(e)}" for s, e in list(failed.items())[:10])
-    raise RuntimeError(f"LIVE_DATA_QUALITY_FAILED {label} count={len(failed)} sample={sample}")
+    raise RuntimeError(
+        f"LIVE_DATA_QUALITY_FAILED {label} count={len(failed)} sample={_sample(failed)}"
+    )
 
 
 def morning_gate() -> dict:
-    """Validate the same broad market universe before morning model execution."""
+    """Validate the broad market universe without blocking on isolated bad tickers.
+
+    NSE feeds can contain stale/corrupt OHLC rows for individual symbols.  The
+    morning predictor already has per-symbol failure isolation, so the gate
+    should only block when the usable universe itself is too small.  This keeps
+    one bad ticker from preventing the entire daily prediction run.
+    """
     if not is_weekday():
         return {"Status": "SKIP_WEEKEND"}
     universe = load_universe()
@@ -31,11 +42,22 @@ def morning_gate() -> dict:
     cutoff = get_data_cutoff_date(raw, None, fallback=fallback)
     if cutoff is None:
         raise RuntimeError("LIVE_DATA_QUALITY_FAILED: no completed market cutoff")
+
     passed, failed = validate_universe(raw, cutoff_date=cutoff, min_rows=30)
-    _fail(failed, "MORNING")
     if len(passed) < 20:
-        raise RuntimeError(f"LIVE_DATA_QUALITY_FAILED MORNING valid_stocks={len(passed)} < 20")
-    return {"Status": "PASS", "Cutoff": str(cutoff), "Validated": len(passed), "Failed": 0}
+        raise RuntimeError(
+            f"LIVE_DATA_QUALITY_FAILED MORNING valid_stocks={len(passed)} < 20 "
+            f"failed={len(failed)} sample={_sample(failed)}"
+        )
+
+    status = "PASS" if not failed else "PASS_WITH_SYMBOL_WARNINGS"
+    return {
+        "Status": status,
+        "Cutoff": str(cutoff),
+        "Validated": len(passed),
+        "Failed": len(failed),
+        "FailedSample": _sample(failed) if failed else "",
+    }
 
 
 def evening_gate() -> dict:
