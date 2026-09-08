@@ -1,4 +1,4 @@
-"""Robust multi-horizon close/return forecasting through 365 trading days."""
+"""Robust multi-horizon forecasting through 365 trading days with explicit per-horizon status."""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
@@ -17,25 +17,20 @@ def _train_target(work,features,target,horizon):
     n=len(work);split=max(60,int(n*.8));split=min(split,n-1);purge=min(horizon,max(0,split-30));train_end=max(30,split-purge)
     Xtr,Xv=work[features].iloc[:train_end],work[features].iloc[split:];ytr,yv=work[target].iloc[:train_end],work[target].iloc[split:]
     if len(Xv)<10 or len(Xtr)<30:raise ValueError("Insufficient chronological validation data")
-    validation_models=_models();vp=[];errors=[]
-    for m in validation_models:
-        m.fit(Xtr,ytr);pred=m.predict(Xv);vp.append(pred);errors.append(_mape(yv,pred))
-    weights=_weights(errors);ensemble=np.average(np.vstack(vp),axis=0,weights=weights)
-    final=_models()
+    vp=[];errors=[]
+    for m in _models():m.fit(Xtr,ytr);pred=m.predict(Xv);vp.append(pred);errors.append(_mape(yv,pred))
+    weights=_weights(errors);ensemble=np.average(np.vstack(vp),axis=0,weights=weights);final=_models()
     for m in final:m.fit(work[features],work[target])
     return {"models":final,"weights":weights.tolist(),"validation_mape":_mape(yv,ensemble),"validation_samples":len(yv),"samples":len(work)}
 def train_horizon_models(df,cutoff_date):
-    x=build_features(df);x=x[x.index<=pd.Timestamp(cutoff_date)].copy();features=get_feature_columns();result={"features":features,"horizons":{}}
+    x=build_features(df);x=x[x.index<=pd.Timestamp(cutoff_date)].copy();features=get_feature_columns();result={"features":features,"horizons":{},"status":{}}
     for h in HORIZONS:
-        work=x[features].copy();work["target_close"]=x["Close"].shift(-h);work["target_return"]=(x["Close"].shift(-h)/x["Close"]-1)*100;work=work.replace([np.inf,-np.inf],np.nan).dropna()
-        # Require enough history for a genuine chronological validation window.
-        minimum=max(150,100+h)
+        work=x[features].copy();work["target_close"]=x["Close"].shift(-h);work["target_return"]=(x["Close"].shift(-h)/x["Close"]-1)*100;work=work.replace([np.inf,-np.inf],np.nan).dropna();minimum=max(150,100+h)
         if len(work)<minimum:
-            print(f"Horizon {h}D training skipped: {len(work)} rows < {minimum}")
-            continue
+            result["status"][h]={"Status":"INSUFFICIENT_DATA","Samples":len(work),"Minimum":minimum};continue
         try:
-            result["horizons"][h]={"close":_train_target(work,features,"target_close",h),"return":_train_target(work,features,"target_return",h)}
-        except Exception as exc:print(f"Horizon {h}D training skipped: {exc}")
+            result["horizons"][h]={"close":_train_target(work,features,"target_close",h),"return":_train_target(work,features,"target_return",h)};result["status"][h]={"Status":"VALID","Samples":len(work),"Minimum":minimum}
+        except Exception as exc:result["status"][h]={"Status":"MODEL_FAILED","Samples":len(work),"Minimum":minimum,"Error":str(exc)}
     if not result["horizons"]:raise ValueError("No multi-horizon models could be trained")
     return result
 def predict_horizons(df,bundle,cutoff_date):
@@ -43,8 +38,8 @@ def predict_horizons(df,bundle,cutoff_date):
     if usable.empty:raise ValueError("No usable multi-horizon feature row")
     latest=usable.iloc[[-1]];current=float(latest["Close"].iloc[0]);rows=[]
     for h in HORIZONS:
-        info=bundle["horizons"].get(h)
-        if info is None:continue
-        close=np.array([m.predict(latest)[0] for m in info["close"]["models"]]);ret=np.array([m.predict(latest)[0] for m in info["return"]["models"]]);cw=np.asarray(info["close"]["weights"]);rw=np.asarray(info["return"]["weights"]);close_pred=float(close@cw);return_pred=float(ret@rw);close_return=(close_pred/current-1)*100
-        rows.append({"HorizonDays":h,"Pred_Close":close_pred,"Expected_Return":return_pred,"CloseDerivedReturn":close_return,"ValidationMAPE":info["close"]["validation_mape"],"ReturnValidationMAPE":info["return"]["validation_mape"],"Samples":info["close"]["samples"]})
+        info=bundle["horizons"].get(h);status=bundle.get("status",{}).get(h,{})
+        if info is None:
+            rows.append({"HorizonDays":h,"Status":status.get("Status","UNAVAILABLE"),"Pred_Close":np.nan,"Expected_Return":np.nan,"CloseDerivedReturn":np.nan,"ValidationMAPE":np.nan,"ReturnValidationMAPE":np.nan,"Samples":status.get("Samples",0)});continue
+        close=np.array([m.predict(latest)[0] for m in info["close"]["models"]]);ret=np.array([m.predict(latest)[0] for m in info["return"]["models"]]);cw=np.asarray(info["close"]["weights"]);rw=np.asarray(info["return"]["weights"]);close_pred=float(close@cw);return_pred=float(ret@rw);rows.append({"HorizonDays":h,"Status":"VALID","Pred_Close":close_pred,"Expected_Return":return_pred,"CloseDerivedReturn":(close_pred/current-1)*100,"ValidationMAPE":info["close"]["validation_mape"],"ReturnValidationMAPE":info["return"]["validation_mape"],"Samples":info["close"]["samples"]})
     return pd.DataFrame(rows)
