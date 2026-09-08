@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 import hashlib
 import pandas as pd
-from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,MODEL_VERSION,STAGE_NAME,TRANSACTION_COST_BPS,SLIPPAGE_BPS
+from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,MODEL_VERSION,STAGE_NAME,TRANSACTION_COST_BPS,SLIPPAGE_BPS,MAX_PER_PRICE_BUCKET,PREDICTION_TOP_N
 from .utils import write_json
 
 def prediction_path(prediction_date): return PREDICTIONS_DIR / f"predictions_{prediction_date}.csv"
@@ -27,8 +27,9 @@ def _valid_prediction_ledger(df):
     if df.empty or "Symbol" not in df.columns or "Prediction_ID" not in df.columns:return False
     if df["Symbol"].isna().any() or df["Symbol"].astype(str).str.strip().eq("").any():return False
     if df["Symbol"].astype(str).nunique()!=len(df):return False
+    if len(df)>int(PREDICTION_TOP_N):return False
     ids=df["Prediction_ID"].astype(str)
-    if ids.isna().any() or ids.str.len().lt(2).any() or ids.nunique()!=len(df):return False
+    if ids.str.lower().isin(["nan","none",""]).any() or ids.str.len().lt(2).any() or ids.nunique()!=len(df):return False
     required=["Pred_Open","Pred_High","Pred_Low","Pred_Close"]
     if any(c not in df.columns for c in required) or df[required].isna().any().any():return False
     for _,r in df.iterrows():
@@ -36,6 +37,9 @@ def _valid_prediction_ledger(df):
             o,h,l,c=[float(r[k]) for k in required]
             if not (l<=min(o,c) and h>=max(o,c)):return False
         except Exception:return False
+    if "PriceBucket" in df.columns:
+        counts=df["PriceBucket"].astype(str).value_counts()
+        if (counts>int(MAX_PER_PRICE_BUCKET)).any():return False
     return True
 
 def prediction_exists(prediction_date):
@@ -50,7 +54,7 @@ def mark_morning_report_sent(prediction_date):write_json(morning_report_path(pre
 def save_predictions(df,prediction_date,metadata=None):
     metadata=dict(metadata or {});metadata.setdefault("PredictionDate",str(prediction_date));metadata.setdefault("ModelVersion",MODEL_VERSION);metadata.setdefault("Stage",STAGE_NAME);path=prediction_path(prediction_date)
     enriched=_baseline_columns(df,metadata)
-    if not _valid_prediction_ledger(enriched):raise ValueError("Prediction ledger failed identity/OHLC integrity validation")
+    if not _valid_prediction_ledger(enriched):raise ValueError("Prediction ledger failed identity/OHLC/selection integrity validation")
     if path.exists():
         try:
             existing=pd.read_csv(path)
@@ -62,7 +66,7 @@ def save_predictions(df,prediction_date,metadata=None):
         except ValueError:raise
         except Exception as exc:raise ValueError(f"Existing prediction ledger unreadable: {exc}")
     path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
-    metadata["PredictionLedgerVersion"]="v6";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();write_json(path.with_suffix(".json"),metadata);return path
+    metadata["PredictionLedgerVersion"]="v7";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();metadata["SelectionIntegrity"]={"MaxStocks":int(PREDICTION_TOP_N),"MaxPerPriceBucket":int(MAX_PER_PRICE_BUCKET)};write_json(path.with_suffix(".json"),metadata);return path
 
 def load_predictions(prediction_date):
     path=prediction_path(prediction_date)
@@ -101,10 +105,12 @@ def save_evaluation(df,market_date):
             pid=ids.get(str(x.at[idx,"Symbol"]))
             if not pid:raise ValueError(f"No canonical Prediction_ID for {x.at[idx,'Symbol']} on {pdate}")
             x.at[idx,"Prediction_ID"]=pid
-    if x["Prediction_ID"].isna().any() or x["Prediction_ID"].astype(str).str.len().lt(2).any():raise ValueError("Evaluation contains unbound Prediction_ID")
-    canonical_by_id={r.Prediction_ID:(str(r.Symbol),str(r.PredictionDate)) for r in x.itertuples()}
-    if any(sym!=str(row.Symbol) or pdate!=str(row.PredictionDate) for pid,(sym,pdate) in canonical_by_id.items() for row in [x[x["Prediction_ID"]==pid].iloc[0]]):raise ValueError("Evaluation Prediction_ID does not bind to Symbol/PredictionDate")
+    if x["Prediction_ID"].astype(str).str.lower().isin(["nan","none",""]).any() or x["Prediction_ID"].astype(str).str.len().lt(2).any():raise ValueError("Evaluation contains unbound Prediction_ID")
     if x.duplicated(["Prediction_ID","Symbol"],keep=False).any():raise ValueError("Evaluation contains duplicate prediction lineage")
+    canonical=load_predictions(pd.Timestamp(str(x["PredictionDate"].iloc[0])).date())
+    binding=canonical[["Symbol","Prediction_ID"]].set_index("Symbol")["Prediction_ID"].to_dict()
+    for _,r in x.iterrows():
+        if binding.get(str(r.Symbol))!=str(r.Prediction_ID):raise ValueError("Evaluation Prediction_ID does not bind to canonical prediction")
     if path.exists():
         try:
             existing=pd.read_csv(path)
