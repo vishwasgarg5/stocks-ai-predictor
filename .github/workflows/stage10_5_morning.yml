@@ -52,6 +52,16 @@ jobs:
           p=Path("src/portfolio_report.py");s=p.read_text()
           if "independent AI coverage" not in s:raise SystemExit("Portfolio AI module not installed")
           s=s.replace('ai=_portfolio_ai(portfolio,cutoff_date,variant);','ai=_portfolio_ai(portfolio,cutoff_date,variant) if cutoff_date is not None else pd.DataFrame();',1)
+          # Keep portfolio prediction compatibility with both Symbol- and Ticker-based fixtures.
+          old='out=out.merge(pred[keep],on="Ticker",how="left");'
+          new='out=out.merge(pred[keep],on="Ticker",how="left");\n    if "AI_Target" not in out.columns and "Pred_Close" in out.columns:out["AI_Target"]=out["Pred_Close"]\n    if "AI_High" not in out.columns and "Pred_High" in out.columns:out["AI_High"]=out["Pred_High"]'
+          if old not in s:raise SystemExit("Portfolio prediction merge line not found")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          # Integration tests and report contract use OHLCV terminology.
+          p=Path("src/telegram_report.py");s=p.read_text()
+          if 'PREDICTED OHLC — TOP 10' not in s:raise SystemExit("Prediction heading not found")
+          s=s.replace('PREDICTED OHLC — TOP 10','PREDICTED OHLCV — TOP 10',1)
           p.write_text(s)
           PY
           python -m py_compile src/telegram_report.py src/morning_runner.py src/market_data.py src/portfolio_report.py
