@@ -43,16 +43,15 @@ def _strict_trade_eligible(df):
     if df.empty:return df
     out=df.copy()
     exp=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(-999)
-    mh=pd.to_numeric(out.get("MultiHorizonExpectedReturn",0),errors="coerce").fillna(-999)
+    mh=pd.to_numeric(out.get("MultiHorizonExpectedReturn",exp),errors="coerce").fillna(-999)
     align=pd.to_numeric(out.get("DirectionReturnAlignment",0),errors="coerce").fillna(0)
     direction=out.get("Direction",pd.Series("NEUTRAL",index=out.index)).astype(str).str.upper()
-    # Long trade candidates must have positive net expected return and at least
-    # one positive medium horizon. Down/neutral names remain watchlist-only.
     return out[(direction=="UP")&(exp>=float(MIN_NET_RETURN_PCT))&(mh>0)&(align>=60)].copy()
 def score_candidates(candidates,regime="SIDEWAYS"):
     if candidates is None or candidates.empty:return pd.DataFrame()
     df=candidates.copy()
-    for c,v in [("SectorScore",50.0),("MultiHorizonExpectedReturn",0.0),("UncertaintyScore",50.0)]:
+    if "MultiHorizonExpectedReturn" not in df.columns:df["MultiHorizonExpectedReturn"]=pd.to_numeric(df.get("Expected_Return",0),errors="coerce").fillna(0.0)
+    for c,v in [("SectorScore",50.0),("UncertaintyScore",50.0)]:
         if c not in df.columns:df[c]=v
     reliability=load_reliability();df["ReliabilityScore"]=df["Symbol"].map(reliability).fillna(50.0);df["TradeConfidence"]=df.apply(calculate_trade_confidence,axis=1);df["TradeQuality"]=df["TradeConfidence"].map(lambda x:"HIGH" if x>=75 else "MEDIUM" if x>=60 else "LOW");df["DirectionReturnAlignment"]=df.apply(lambda r:direction_return_alignment(r.get("Direction","NEUTRAL"),r.get("Expected_Return",0)),axis=1);df["Score"]=df.apply(lambda r:calculate_score(r,regime),axis=1)
     return df.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence","SectorScore"],ascending=False).reset_index(drop=True)
@@ -67,8 +66,7 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     for bucket,group in qualified.groupby("PriceBucket",sort=False):
         g=group.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
         limit=len(g) if max_per_bucket is None or max_per_bucket<=0 else min(len(g),int(max_per_bucket));groups.append((bucket,g.head(limit)))
-    if bucket_only or top_n is None or int(top_n)<=0:
-        return pd.concat([g for _,g in groups],ignore_index=True).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
+    if bucket_only or top_n is None or int(top_n)<=0:return pd.concat([g for _,g in groups],ignore_index=True).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     n=int(top_n);seeded=[g.iloc[0] for _,g in groups if not g.empty];chosen=pd.DataFrame(seeded).drop_duplicates(subset=["Symbol"]) if seeded else qualified.iloc[0:0]
     if len(chosen)<n:
         remaining=qualified[~qualified["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False);chosen=pd.concat([chosen,remaining.head(n-len(chosen))],ignore_index=True)
