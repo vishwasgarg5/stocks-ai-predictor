@@ -44,6 +44,7 @@ jobs:
             tests/test_stage10_5_hardening.py \
             tests/test_stage10_5_trade_gating.py \
             tests/test_portfolio_report_schema.py \
+            tests/test_portfolio_stage28_hardening.py \
             tests/test_market_outlook.py \
             tests/test_data_snapshot.py \
             tests/test_report_integrity.py
