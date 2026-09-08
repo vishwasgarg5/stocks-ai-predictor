@@ -40,6 +40,27 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PYTHONUNBUFFERED: "1"
         run: python -m src.evening
+      - name: Verify immutable evaluation lineage and report shape
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          from src.ledger import latest_prediction_date, load_predictions, evaluation_path
+          from src.utils import today_ist
+          market_date=today_ist()
+          pred_date=latest_prediction_date(market_date)
+          assert pred_date is not None, "No prediction ledger available"
+          p=load_predictions(pred_date)
+          e=pd.read_csv(evaluation_path(market_date))
+          assert not p.empty and not e.empty, "Prediction/evaluation ledger empty"
+          assert "Prediction_ID" in p.columns and "Prediction_ID" in e.columns, "Missing Prediction_ID"
+          expected=dict(zip(p["Symbol"].astype(str),p["Prediction_ID"].astype(str)))
+          for _,r in e.iterrows():
+              assert expected.get(str(r["Symbol"]))==str(r["Prediction_ID"]), f"Lineage mismatch: {r['Symbol']}"
+          for c in ["Pred_Open","Pred_High","Pred_Low","Pred_Close","Actual_Open","Actual_High","Actual_Low","Actual_Close"]:
+              assert c in e.columns, f"Missing evaluation field {c}"
+          print(f"Verified {len(e)} evaluation rows against {len(p)} immutable predictions")
+          PY
       - name: Run live quality controls
         env:
           PYTHONUNBUFFERED: "1"
