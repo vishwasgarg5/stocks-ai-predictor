@@ -71,8 +71,10 @@ def _attach_predictions(base):
     pred,date=_latest_predictions();out=base.copy()
     if pred.empty:return out,date
     pred=pred.drop_duplicates("Ticker",keep="last")
-    keep=[c for c in ["Ticker","Pred_Close","Pred_Open","Pred_High","Pred_Low","Confidence","CalibratedConfidence","Direction","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_7D","Horizon_10D","Horizon_20D"] if c in pred.columns]
-    return out.merge(pred[keep],on="Ticker",how="left"),date
+    keep=[c for c in ["Ticker","Pred_Close","Pred_Open","Pred_High","Pred_Low","AI_High","AI_Low","Confidence","CalibratedConfidence","Direction","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_7D","Horizon_10D","Horizon_20D"] if c in pred.columns]
+    out=out.merge(pred[keep],on="Ticker",how="left")
+    if "AI_High" not in out.columns and "Pred_High" in out.columns:out["AI_High"]=out["Pred_High"]
+    return out,date
 
 def _average_plan(row):
     avg=float(row.get("Average_Price",np.nan));target=float(row.get("AI_Target",row.get("Pred_Close",np.nan)));row["Profit_Target_Price"]=avg*(1+TARGET_PROFIT_PCT/100) if np.isfinite(avg) else np.nan;row["Projected_Return_At_AI_Target"]=(target/avg-1)*100 if np.isfinite(avg) and avg else np.nan;return row
@@ -81,8 +83,7 @@ def _num(row,name,default=np.nan):
     try:v=float(row.get(name,default));return v if np.isfinite(v) else default
     except Exception:return default
 
-def _forecast_return(row):
-    return [(h,v) for h in (1,3,5,7,10,20) if np.isfinite(v:=_num(row,f"Horizon_{h}D"))]
+def _forecast_return(row):return [(h,v) for h in (1,3,5,7,10,20) if np.isfinite(v:=_num(row,f"Horizon_{h}D"))]
 
 def _decision(current,avg,target,confidence,forecasts):
     if current is None or not np.isfinite(current) or not np.isfinite(avg) or avg<=0:return "WAIT","NO PRICE / COST DATA"
@@ -124,15 +125,13 @@ def _plan_row(row,pred,prediction_date):
     if pd.isna(avg) and current is not None and pd.notna(reported_pnl) and qty>0:avg=current-float(reported_pnl)/qty
     target=_num(pred,"Pred_Close") if pred is not None else np.nan;confidence=_num(pred,"Confidence",0) if pred is not None else 0;direction=str(pred.get("Direction","-") if pred is not None else "-");forecasts=_forecast_return(pred) if pred is not None else []
     invested=qty*float(avg) if pd.notna(avg) else 0.0;value=qty*current if current is not None else 0.0;pnl=value-invested;ret=pnl/invested*100 if invested else np.nan;profit_target=float(avg)*(1+TARGET_PROFIT_PCT/100) if pd.notna(avg) else np.nan;recovery=((float(avg)-current)/float(avg)*100) if current is not None and pd.notna(avg) and float(avg) else np.nan
-    decision,reason=_decision(current,float(avg) if pd.notna(avg) else np.nan,target,confidence,forecasts);rec=0;newavg=float(avg) if pd.notna(avg) else np.nan
-    projected=(target/newavg-1)*100 if np.isfinite(target) and np.isfinite(newavg) and newavg else np.nan
-    return {"Stock":_symbol(ticker),"Ticker":ticker,"Quantity":int(qty),"Average_Price":avg,"Current_Price":current,"Invested_Value":invested,"Current_Value":value,"PnL":pnl,"Current_PnL_INR":pnl,"Return_Pct":ret,"AI_Target":target,"AI_Confidence":confidence,"AI_Direction":direction,"Decision":decision,"Sell_Window":"NOW" if decision=="SELL" else ("MONITOR" if np.isfinite(target) else "NO AI DATA"),"Profit_Target_Price":target if np.isfinite(target) else profit_target,"Sell_Target_Price":target,"Recommended_Qty":rec,"New_Average_Price":newavg,"Projected_Return_At_AI_Target":projected,"Recovery_Gap_Pct":recovery,"Sell_Reason":reason,"PredictionDate":prediction_date or "-","PriceSource":source}
+    decision,reason=_decision(current,float(avg) if pd.notna(avg) else np.nan,target,confidence,forecasts);newavg=float(avg) if pd.notna(avg) else np.nan;projected=(target/newavg-1)*100 if np.isfinite(target) and np.isfinite(newavg) and newavg else np.nan
+    return {"Stock":_symbol(ticker),"Ticker":ticker,"Quantity":int(qty),"Average_Price":avg,"Current_Price":current,"Invested_Value":invested,"Current_Value":value,"PnL":pnl,"Current_PnL_INR":pnl,"Return_Pct":ret,"AI_Target":target,"AI_Confidence":confidence,"AI_Direction":direction,"Decision":decision,"Sell_Window":"NOW" if decision=="SELL" else ("MONITOR" if np.isfinite(target) else "NO AI DATA"),"Profit_Target_Price":target if np.isfinite(target) else profit_target,"Sell_Target_Price":target,"Recommended_Qty":0,"New_Average_Price":newavg,"Projected_Return_At_AI_Target":projected,"Recovery_Gap_Pct":recovery,"Sell_Reason":reason,"PredictionDate":prediction_date or "-","PriceSource":source}
 
 def portfolio_snapshot(cutoff_date=None,variant="A"):
     portfolio=load_portfolio();empty={"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{},"Available":bool(not portfolio.empty)}
     if portfolio.empty:return pd.DataFrame(columns=OUTPUT_COLUMNS),empty
-    ai=_portfolio_ai(portfolio,cutoff_date,variant);ai_by={str(r.Symbol)+".NS":r for _,r in ai.iterrows()} if not ai.empty else {};_,latest_date=_latest_predictions();prediction_date=str(cutoff_date or latest_date or "-")
-    rows=[_plan_row(r,ai_by.get(str(r.Ticker)),prediction_date) for _,r in portfolio.iterrows()];df=pd.DataFrame(rows)
+    ai=_portfolio_ai(portfolio,cutoff_date,variant);ai_by={str(r.Symbol)+".NS":r for _,r in ai.iterrows()} if not ai.empty else {};_,latest_date=_latest_predictions();prediction_date=str(cutoff_date or latest_date or "-");rows=[_plan_row(r,ai_by.get(str(r.Ticker)),prediction_date) for _,r in portfolio.iterrows()];df=pd.DataFrame(rows)
     for c in OUTPUT_COLUMNS:
         if c not in df.columns:df[c]=np.nan
     df=df[OUTPUT_COLUMNS];df["PnL"]=pd.to_numeric(df["PnL"],errors="coerce").fillna(0);df["Current_PnL_INR"]=df["PnL"];invested=pd.to_numeric(df["Invested_Value"],errors="coerce").fillna(0).sum();value=pd.to_numeric(df["Current_Value"],errors="coerce").fillna(0).sum();pnl=value-invested
