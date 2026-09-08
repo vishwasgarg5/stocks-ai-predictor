@@ -66,9 +66,8 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     if scored.empty:return scored
     base=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=60.0)].copy()
     strict=_apply_uncertainty_cap(_strict_trade_eligible(base))
-    if strict.empty:strict=_apply_uncertainty_cap(base)
-    if strict.empty:strict=scored.copy()
-    # Every path, including fallback, is subject to the bucket cap.
+    if strict.empty:strict=_apply_uncertainty_cap(base[base["Direction"].astype(str).str.upper().eq("UP")])
+    if strict.empty:strict=base[base["Direction"].astype(str).str.upper().eq("UP")].copy()
     capped=_bucket_cap(strict,max_per_bucket)
     if bucket_only:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     n=None if top_n is None else int(top_n)
@@ -80,5 +79,4 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     if len(chosen)<n:
         remaining=capped[~capped["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
         chosen=pd.concat([chosen,remaining.head(n-len(chosen))],ignore_index=True)
-    # If fewer than N remain after eligibility/caps, return the maximum valid set.
     return chosen.drop_duplicates("Symbol").head(n).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
