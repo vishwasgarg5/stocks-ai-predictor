@@ -90,8 +90,9 @@ def _decision(current,avg,target,confidence,forecasts):
     if current is None or not np.isfinite(current) or not np.isfinite(avg) or avg<=0:return "WAIT","NO PRICE / COST DATA"
     if not np.isfinite(target):return "HOLD","AI TARGET UNAVAILABLE"
     target_gap=(target/avg-1.0)*100.0; recovery_gap=(avg-current)/avg*100.0
-    if current+1e-9 >= avg*(1+TARGET_PROFIT_PCT/100):return "SELL","10% profit target already reached"
-    if current+1e-9 >= target and target>avg:return "SELL","AI target reached"
+    tolerance=max(1e-8,abs(avg)*1e-8)
+    if current+tolerance >= avg*(1+TARGET_PROFIT_PCT/100):return "SELL","10% profit target already reached"
+    if current+tolerance >= target and target>avg:return "SELL","AI target reached"
     if target < current*(1-SELL_RISK_GAP_PCT/100):return "SELL","AI target is materially below current price"
     positive=[v for _,v in forecasts if np.isfinite(v) and v>=TARGET_PROFIT_PCT]
     if recovery_gap>=5 and positive and confidence>=MIN_AI_CONFIDENCE:return "AVG","Multi-horizon recovery supports limited averaging"
@@ -119,7 +120,7 @@ def portfolio_snapshot():
     if portfolio.empty:return pd.DataFrame(columns=OUTPUT_COLUMNS),empty
     predictions,prediction_date=_latest_predictions();pred_by_ticker={}
     if not predictions.empty:
-        for _,r in predictions.drop_duplicates("Ticker",keep="last").iterrows():pred_by_ticker[str(r["Ticker"])]=r
+        for _,r in predictions.drop_duplicates("Ticker",keep="last").iterrows():pred_by_ticker[str(r["Ticker"])] = r
     df=pd.DataFrame([_plan_row(row,pred_by_ticker.get(str(row["Ticker"])),prediction_date) for _,row in portfolio.iterrows()])
     for c in OUTPUT_COLUMNS:
         if c not in df.columns:df[c]=np.nan
