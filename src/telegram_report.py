@@ -11,6 +11,7 @@ _SECTION="\n§§TELEGRAM_SECTION§§\n"
 _BUCKET_ORDER=["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
 _BUCKET_LABELS={"B1":">2500","B2":"1000-2499","B3":"500-999","B4":"250-499","B5":"100-249","B6":"50-99","B7":"10-49"}
 _CODE_RE=re.compile(r"^```$")
+REPORT_HORIZONS=(3,7,10)
 
 def _markdown_to_telegram_html(text):
     chunks=text.split("```");out=[]
@@ -158,18 +159,18 @@ def _horizon_value(r,h):
     return None
 
 def _horizon_status(r):
-    vals=[_num(_horizon_value(r,h)) for h in (60,90,180,365)];vals=[v for v in vals if v is not None]
-    if not vals:return "-"
-    strong=sum(v>=15 for v in vals);positive=sum(v>0 for v in vals)
-    if len(vals)>=3 and strong>=3:return "🟢 CONFIRMED"
-    if positive>=2:return "🟡 MIXED"
+    vals=[_num(_horizon_value(r,h)) for h in REPORT_HORIZONS];vals=[v for v in vals if v is not None]
+    if len(vals)<3:return "-"
+    positive=sum(v>0 for v in vals)
+    if positive==3:return "🟢 BULLISH"
+    if positive==2:return "🟡 MIXED"
     return "🔴 WEAK"
 
 def _horizon_table(selected):
-    if selected is None or selected.empty:return []
+    if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","No multi-horizon predictions available."]
     rows=[]
-    for _,r in _sort(selected).head(10).iterrows():rows.append([str(r.get("Symbol","-"))]+[_pct(_horizon_value(r,h)) for h in (20,60,90,180,365)]+[_horizon_status(r)])
-    return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","20D/60D/90D/180D/365D expected return; status requires multi-horizon confirmation.",*_table(["Stock","20D","60D","90D","180D","365D","Status"],rows,max_width=13)]
+    for _,r in _sort(selected).head(10).iterrows():rows.append([str(r.get("Symbol","-"))]+[_pct(_horizon_value(r,h)) for h in REPORT_HORIZONS]+[_horizon_status(r)])
+    return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","Short-term expected return by trading-day horizon.",*_table(["Stock","3D","7D","10D","Status"],rows,max_width=13)]
 
 def _jump(j):
     if j is None or j.empty:return ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
@@ -199,12 +200,10 @@ def _ipo(x):
     return ["🏦 *IPO INTELLIGENCE — TOP 5*","Subscription/GMP/valuation inputs are shown when supplied by the IPO feed.",*_table(["IPO","Status","Price","GMP","GMP%","AI View"],rows,max_width=14)]
 
 def _portfolio_horizon_status(x):
-    vals=[_num(x.get(f"Horizon_{h}D")) for h in (60,90,180,365)];vals=[v for v in vals if v is not None]
-    if not vals:return str(x.get("Portfolio_Target_Status",x.get("Target_Status","-")))
-    strong=sum(v>=15 for v in vals);positive=sum(v>0 for v in vals)
-    if len(vals)>=3 and strong>=3:return "🟢 CONFIRMED"
-    if positive>=2:return "🟡 MIXED"
-    return "🔴 WEAK"
+    vals=[_num(x.get(f"Horizon_{h}D")) for h in REPORT_HORIZONS];vals=[v for v in vals if v is not None]
+    if len(vals)<3:return str(x.get("Portfolio_Target_Status",x.get("Target_Status","-")))
+    positive=sum(v>0 for v in vals)
+    return "🟢 BULLISH" if positive==3 else "🟡 MIXED" if positive==2 else "🔴 WEAK"
 
 def _portfolio(p):
     if not p:return []
@@ -255,7 +254,7 @@ def _evaluation_stock_tables(evaluation,market_date=None,limit=10):
         g=e[e["_bucket"]==bucket]
         for _,r in _sort(g).head(min(6,limit-displayed)).iterrows():
             pred=[r.get("Pred_Open"),r.get("Pred_High"),r.get("Pred_Low"),r.get("Pred_Close")];actual=[r.get("Actual_Open"),r.get("Actual_High"),r.get("Actual_Low"),r.get("Actual_Close")]
-            sections.append("\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get('Symbol','-')).strip()}*",*_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]]])]))
+            sections.append("\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get('Symbol','-')).strip()}*",*_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]])]))
             displayed+=1
             if displayed>=limit:break
     return sections
