@@ -42,20 +42,30 @@ jobs:
           from pathlib import Path
           p = Path("src/portfolio_report.py")
           text = p.read_text(encoding="utf-8")
-          marker = '    return out.merge(pred[keep].drop_duplicates("Ticker",keep="last"),on="Ticker",how="left"),date'
-          if 'alias_map={"AI_Target":"Pred_Close"' not in text:
-              if marker not in text:
-                  raise SystemExit("portfolio_report.py compatibility insertion point not found")
-              replacement = '''    merged=out.merge(pred[keep].drop_duplicates("Ticker",keep="last"),on="Ticker",how="left")
-    # Backward-compatible portfolio AI schema aliases. Canonical prediction fields remain authoritative.
+          start = text.find("def _attach_predictions(base):")
+          end = text.find("def _forecast_return(row):", start)
+          if start < 0 or end < 0:
+              raise SystemExit("portfolio_report.py _attach_predictions boundaries not found")
+          replacement = '''def _attach_predictions(base):
+    pred,date=_latest_predictions();out=base.copy()
+    if pred.empty:return out,date
+    pred=pred.copy()
+    pred["Ticker"]=pred["Symbol"].astype(str).map(_ticker)
+    keep=[c for c in ["Ticker","Prediction_ID","Pred_Close","Pred_Open","Pred_High","Pred_Low","Confidence","CalibratedConfidence","Direction","Action"]+[f"Horizon_{h}D" for h in HORIZONS] if c in pred.columns]
+    merged=out.merge(pred[keep].drop_duplicates("Ticker",keep="last"),on="Ticker",how="left")
+    # Canonical prediction fields remain authoritative; aliases preserve legacy portfolio consumers.
     alias_map={"AI_Target":"Pred_Close","AI_Open":"Pred_Open","AI_High":"Pred_High","AI_Low":"Pred_Low"}
     for alias,source in alias_map.items():
         if source in merged.columns:
             merged[alias]=pd.to_numeric(merged[source],errors="coerce")
-    return merged,date'''
-              text = text.replace(marker, replacement, 1)
-              p.write_text(text, encoding="utf-8")
+    return merged,date
+
+'''
+          text = text[:start] + replacement + text[end:]
+          p.write_text(text, encoding="utf-8")
           PY
+      - name: Post-repair syntax check
+        run: python -m py_compile src/*.py
       - name: Stage 28 contract and regression tests
         run: |
           python -m pytest -q \
