@@ -35,25 +35,24 @@ jobs:
           s=s.replace("portfolio=_portfolio_payload(),","portfolio=_portfolio_payload(cutoff,meta.get(\"ModelVariant\",\"A\")),",1)
           s=s.replace("portfolio=_portfolio_payload());","portfolio=_portfolio_payload(cutoff_date,variant));",1)
           s=s.replace("min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0","min_score=55.0,min_confidence=55.0,min_trade_confidence=55.0",1)
-          s=s.replace('"MultiHorizons":[1,3,5,7,20]','"MultiHorizons":[1,3,5,7,10,20]',1);p.write_text(s)
-          p=Path("tests/test_stage10_5.py");p.write_text(p.read_text().replace('tuple(MULTI_HORIZONS)==(1,3,5,7,20)','tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)'))
-          p=Path("src/market_data.py");s=p.read_text();old='    _install_extended_market_renderer(snap);return snap';new='    snap["RegimePrediction"]=get_market_regime(cutoff);_install_extended_market_renderer(snap);return snap'
+          s=s.replace('"MultiHorizons":[1,3,5,7,20]','"MultiHorizons":[1,3,5,7,10,20]',1)
+          p.write_text(s)
+          p=Path("tests/test_stage10_5.py")
+          p.write_text(p.read_text().replace('tuple(MULTI_HORIZONS)==(1,3,5,7,20)','tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)'))
+          p=Path("src/market_data.py");s=p.read_text()
+          old='    _install_extended_market_renderer(snap);return snap'
+          new='    snap["RegimePrediction"]=get_market_regime(cutoff);_install_extended_market_renderer(snap);return snap'
           if old in s:s=s.replace(old,new,1)
           elif 'snap["RegimePrediction"]=get_market_regime(cutoff)' not in s:raise SystemExit("Expected market snapshot return not found")
-          pattern=r'def get_market_regime\(cutoff_date=None\):.*?(?=def get_row_for_date)';replacement='''def get_market_regime(cutoff_date=None):\n    df=get_nifty_data("1y")\n    if df.empty:return {"name":"UNKNOWN","score":50,"confidence":35}\n    if cutoff_date is not None:df=df[df.index.date<=pd.Timestamp(cutoff_date).date()]\n    if len(df)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}\n    close=pd.to_numeric(df["Close"],errors="coerce").dropna()\n    if len(close)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}\n    sma20=close.rolling(20).mean().iloc[-1];sma50=close.rolling(50).mean().iloc[-1];sma200=close.rolling(200).mean().iloc[-1] if len(close)>=200 else sma50\n    ret20=(close.iloc[-1]/close.iloc[-21]-1)*100 if len(close)>=21 else 0.0;ret60=(close.iloc[-1]/close.iloc[-61]-1)*100 if len(close)>=61 else 0.0;vol=close.pct_change().rolling(20).std().iloc[-1]*100;current=close.iloc[-1];score=50.0\n    score+=10 if current>sma20 else -10;score+=10 if current>sma50 else -10;score+=10 if current>sma200 else -10;score+=8 if ret20>2 else -8 if ret20<-2 else 0;score+=7 if ret60>5 else -7 if ret60<-5 else 0\n    if vol>2.5:score-=8\n    score=max(0,min(100,score));name="BULL" if score>=65 else "BEAR" if score<=40 else "SIDEWAYS";confidence=max(35,min(95,50+abs(score-50)*1.2))\n    return {"name":name,"score":score,"confidence":confidence,"SMA20":sma20,"SMA50":sma50,"SMA200":sma200,"Return20D":ret20,"Return60D":ret60,"Volatility20D":vol}\n'''
+          pattern=r'def get_market_regime\(cutoff_date=None\):.*?(?=def get_row_for_date)'
+          replacement='''def get_market_regime(cutoff_date=None):\n    df=get_nifty_data("1y")\n    if df.empty:return {"name":"UNKNOWN","score":50,"confidence":35}\n    if cutoff_date is not None:df=df[df.index.date<=pd.Timestamp(cutoff_date).date()]\n    if len(df)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}\n    close=pd.to_numeric(df["Close"],errors="coerce").dropna()\n    if len(close)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}\n    sma20=close.rolling(20).mean().iloc[-1];sma50=close.rolling(50).mean().iloc[-1];sma200=close.rolling(200).mean().iloc[-1] if len(close)>=200 else sma50\n    ret20=(close.iloc[-1]/close.iloc[-21]-1)*100 if len(close)>=21 else 0.0;ret60=(close.iloc[-1]/close.iloc[-61]-1)*100 if len(close)>=61 else 0.0;vol=close.pct_change().rolling(20).std().iloc[-1]*100;current=close.iloc[-1];score=50.0\n    score+=10 if current>sma20 else -10;score+=10 if current>sma50 else -10;score+=10 if current>sma200 else -10;score+=8 if ret20>2 else -8 if ret20<-2 else 0;score+=7 if ret60>5 else -7 if ret60<-5 else 0\n    if vol>2.5:score-=8\n    score=max(0,min(100,score));name="BULL" if score>=65 else "BEAR" if score<=40 else "SIDEWAYS";confidence=max(35,min(95,50+abs(score-50)*1.2))\n    return {"name":name,"score":score,"confidence":confidence,"SMA20":sma20,"SMA50":sma50,"SMA200":sma200,"Return20D":ret20,"Return60D":ret60,"Volatility20D":vol}\n'''
           s2,n=re.subn(pattern,replacement,s,flags=re.S)
           if n!=1:raise SystemExit("Market regime function not found")
           p.write_text(s2)
           p=Path("src/portfolio_report.py");s=p.read_text()
           if "independent AI coverage" not in s:raise SystemExit("Portfolio AI module not installed")
-          s=s.replace('ai=_portfolio_ai(portfolio,cutoff_date,variant);','ai=_portfolio_ai(portfolio,cutoff_date,variant) if cutoff_date is not None else pd.DataFrame();',1);p.write_text(s)
-          p=Path("src/telegram_report.py");lines=p.read_text().splitlines();out=[];fixed=False
-          for line in lines:
-              if "sections.append(" in line and "Difference%" in line:
-                  indent=line[:len(line)-len(line.lstrip())];out.append(indent+'table=_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]]])');out.append(indent+'sections.append("\\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get(\'Symbol\',\'-\')).strip()}*",*table]))');fixed=True
-              else:out.append(line)
-          if not fixed:raise SystemExit("Evaluation table syntax line not found")
-          p.write_text("\n".join(out)+"\n")
+          s=s.replace('ai=_portfolio_ai(portfolio,cutoff_date,variant);','ai=_portfolio_ai(portfolio,cutoff_date,variant) if cutoff_date is not None else pd.DataFrame();',1)
+          p.write_text(s)
           PY
           python -m py_compile src/telegram_report.py src/morning_runner.py src/market_data.py src/portfolio_report.py
       - name: Run hardening, portfolio and market-outlook tests
