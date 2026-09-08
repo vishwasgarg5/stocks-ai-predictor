@@ -11,7 +11,6 @@ def load_reliability():
             mape=float(r.get("MAPE",3) or 3);direction=float(r.get("DirectionAccuracy",50) or 50);samples=float(r.get("Samples",0) or 0);evidence=min(samples/20.0,1.0);raw=0.55*clamp(100-mape*20)+0.45*direction;out[str(r["Symbol"])]=50+evidence*(raw-50)
         return out
     except Exception:return {}
-
 def expected_return_score(v):return clamp(50+float(v)*5)
 def multi_horizon_score(v):
     try:return clamp(50+float(v)*4)
@@ -66,29 +65,20 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     scored=score_candidates(candidates,regime)
     if scored.empty:return scored
     base=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=60.0)].copy()
-    strict=_strict_trade_eligible(base);strict=_apply_uncertainty_cap(strict)
-    if strict.empty:
-        strict=base.copy()
-    if strict.empty:
-        # Do not silently return zero when the pipeline has enough scored predictions.
-        # This is a presentation/selection fallback, not a trade-eligibility override:
-        # downstream decision/risk fields still determine whether a stock is actionable.
-        strict=scored.copy()
-    if bucket_only:return _bucket_cap(strict,max_per_bucket).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
+    strict=_apply_uncertainty_cap(_strict_trade_eligible(base))
+    if strict.empty:strict=_apply_uncertainty_cap(base)
+    if strict.empty:strict=scored.copy()
+    # Every path, including fallback, is subject to the bucket cap.
+    capped=_bucket_cap(strict,max_per_bucket)
+    if bucket_only:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     n=None if top_n is None else int(top_n)
-    if n is None or n<=0:return _bucket_cap(strict,max_per_bucket).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
-    # First take one best stock from each bucket, then fill remaining slots globally.
-    bucketed=_bucket_cap(strict,max_per_bucket)
+    if n is None or n<=0:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     seeded=[]
-    for _,group in bucketed.groupby("PriceBucket",sort=False):
+    for _,group in capped.groupby("PriceBucket",sort=False):
         if not group.empty:seeded.append(group.iloc[0])
-    chosen=pd.DataFrame(seeded).drop_duplicates("Symbol") if seeded else strict.iloc[0:0]
+    chosen=pd.DataFrame(seeded).drop_duplicates("Symbol") if seeded else capped.iloc[0:0]
     if len(chosen)<n:
-        remaining=bucketed[~bucketed["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
+        remaining=capped[~capped["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
         chosen=pd.concat([chosen,remaining.head(n-len(chosen))],ignore_index=True)
-    if len(chosen)<n:
-        remaining=scored[~scored["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
-        chosen=pd.concat([chosen,remaining.head(n-len(chosen))],ignore_index=True)
-    # Final global cap guarantees exactly N when at least N scored predictions exist.
-    chosen=chosen.drop_duplicates("Symbol").head(n)
-    return chosen.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
+    # If fewer than N remain after eligibility/caps, return the maximum valid set.
+    return chosen.drop_duplicates("Symbol").head(n).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
