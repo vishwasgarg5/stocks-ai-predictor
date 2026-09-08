@@ -1,9 +1,17 @@
-IPOName,Status,GMP,GMP %,Est. listing,Band / Price,Dates,PriceHigh,RevenueGrowth,ProfitGrowth,ROE,DebtToEquity,PE,IndustryPE,QIBSubscription,NIISubscription,RetailSubscription,GMPValue,GMPPct,ImpliedListingPrice,IPOScore,IPOAction,GMPWarning
-Ashutosh FibreSME,Allotment out,36.0,+39.13%,₹128,₹87–₹92,31 Aug 2026 – 2 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,36.0,3600.0,37.0,72.5,CONSIDER,POSITIVE GMP
-Shanti InorganicsSME,Allotment out,34.0,+40.96%,₹117,₹79–₹83,31 Aug 2026 – 2 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,34.0,3400.0,35.0,72.5,CONSIDER,POSITIVE GMP
-Deepa JewellersMainboard,Allotment out,18.0,+10.17%,₹195,₹168–₹177,1 Sept 2026 – 3 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,18.0,1800.0,19.0,72.5,CONSIDER,POSITIVE GMP
-Farm PeaceSME,Allotment out,16.0,+27.12%,₹75,₹59,1 Sept 2026 – 3 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,16.0,1600.0,17.0,72.5,CONSIDER,POSITIVE GMP
-Rays of BeliefMainboard,Allotment out,12.0,+5.02%,₹251,₹227–₹239,1 Sept 2026 – 3 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,12.0,1200.0,13.0,72.5,CONSIDER,POSITIVE GMP
-Purple Style LabsMainboard,Allotment out,2.0,+0.35%,₹577,₹546–₹575,31 Aug 2026 – 2 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,2.0,200.0,3.0,72.5,CONSIDER,POSITIVE GMP
-Fly-Hi Maritime TravelsSME,Allotment out,1.0,+0.98%,₹103,₹102,1 Sept 2026 – 3 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,1.0,100.0,2.0,72.5,CONSIDER,POSITIVE GMP
-Phychem TechnologiesSME,Allotment out,1.0,+1.85%,₹55,₹51–₹54,31 Aug 2026 – 2 Sept 2026,0.0,0,0,0,0,0,0,0,0,0,1.0,100.0,2.0,72.5,CONSIDER,POSITIVE GMP
+IPOName,Status,PriceHigh,GMP,Sub,Dates,ListingDate,RevenueGrowth,ProfitGrowth,ROE,DebtToEquity,PE,IndustryPE,QIBSubscription,NIISubscription,RetailSubscription,GMPValue,GMPPct,ImpliedListingPrice,IPOScore,IPOAction,GMPWarning
+Manika PlastechMainboard,Opens in 3d,43.0,16.0,—,11 Sept 2026 – 16 Sept 2026,—,0,0,0,0,0,0,0,0,0,16.0,37.2093023255814,59.0,66.74418604651163,CONSIDER,POSITIVE GMP
+RentomojoMainboard,Opens tomorrow,404.0,135.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,135.0,33.415841584158414,539.0,65.0371287128713,CONSIDER,POSITIVE GMP
+Karamtara EngineeringMainboard,Opens tomorrow,254.0,56.5,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,56.5,22.244094488188974,310.5,60.00984251968504,WATCH,POSITIVE GMP
+Veegaland DevelopersMainboard,Opens in 2d,140.0,30.0,—,10 Sept 2026 – 15 Sept 2026,—,0,0,0,0,0,0,0,0,0,30.0,21.428571428571427,170.0,59.64285714285714,WATCH,POSITIVE GMP
+Asset Reconstruction Co.(India)Mainboard,Opens tomorrow,139.0,27.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,27.0,19.424460431654676,166.0,58.7410071942446,WATCH,POSITIVE GMP
+LCC ProjectsMainboard,Opens tomorrow,146.0,25.25,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,25.25,17.294520547945204,171.25,57.782534246575345,WATCH,POSITIVE GMP
+Manipal Payment & Identity SolutionsMainboard,Opens tomorrow,339.0,38.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,38.0,11.209439528023598,377.0,55.044247787610615,WATCH,POSITIVE GMP
+Amtech EstersSME,Opens tomorrow,75.0,7.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,7.0,9.333333333333334,82.0,54.2,WATCH,POSITIVE GMP
+Vinod TexworldSME,Opens tomorrow,94.0,8.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,8.0,8.51063829787234,102.0,53.829787234042556,WATCH,POSITIVE GMP
+Maharaja & Speedex IndiaSME,Opens in 2d,186.0,15.0,—,10 Sept 2026 – 15 Sept 2026,—,0,0,0,0,0,0,0,0,0,15.0,8.064516129032258,201.0,53.62903225806451,WATCH,POSITIVE GMP
+Infrax RenewableSME,Opens tomorrow,104.0,0.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,0.0,0.0,104.0,50.0,WATCH,LOW GMP
+Steamhouse IndiaMainboard,Opens tomorrow,81.0,0.0,—,9 Sept 2026 – 11 Sept 2026,—,0,0,0,0,0,0,0,0,0,0.0,0.0,81.0,50.0,WATCH,LOW GMP
+Om GalaxySME,Opens in 2d,90.0,0.0,—,10 Sept 2026 – 15 Sept 2026,—,0,0,0,0,0,0,0,0,0,0.0,0.0,90.0,50.0,WATCH,LOW GMP
+Raksan TransformersSME,Opens in 2d,273.0,0.0,—,10 Sept 2026 – 15 Sept 2026,—,0,0,0,0,0,0,0,0,0,0.0,0.0,273.0,50.0,WATCH,LOW GMP
+Panchatv BharatSME,Opens in 2d,140.0,0.0,—,10 Sept 2026 – 15 Sept 2026,—,0,0,0,0,0,0,0,0,0,0.0,0.0,140.0,50.0,WATCH,LOW GMP
+Century Business MediaSME,Opens in 3d,74.0,0.0,—,11 Sept 2026 – 16 Sept 2026,—,0,0,0,0,0,0,0,0,0,0.0,0.0,74.0,50.0,WATCH,LOW GMP
