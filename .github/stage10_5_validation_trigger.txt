@@ -1,0 +1,1 @@
+Validation trigger for the current Stage 10.5 fixes. Safe to retain; it is not included in the workflow's state commit.
