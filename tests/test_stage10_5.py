@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]
 REQUIRED_SOURCE_FILES=["src/__init__.py","src/config.py","src/features.py","src/market_data.py","src/models.py","src/prediction.py","src/multihorizon.py","src/selection.py","src/stage4_engine.py","src/stage45_engine.py","src/final_intelligence.py","src/evaluation.py","src/retraining.py","src/ledger.py","src/morning_runner.py","src/evening.py","src/telegram_report.py","src/weekly_report.py","src/portfolio_report.py"]
-REQUIRED_WORKFLOWS=[".github/workflows/stage10_5_morning.yml",".github/workflows/stage10_5_evening.yml",".github/workflows/stage10_5_weekly.yml"]
-FORBIDDEN_LEGACY_PATHS=[".github/workflows/stage2_morning.yml",".github/workflows/stage2_evening.yml",".github/workflows/stage2_weekly.yml",".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.py",".github/workflows/stage4_tests.yml",".github/workflows/stage10_4_morning.yml",".github/workflows/stage10_4_evening.yml",".github/workflows/stage10_4_weekly.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv","tests/test_stage2.py"]
+REQUIRED_WORKFLOWS=[".github/workflows/01_morning_prediction.yml",".github/workflows/02_evening_evaluation.yml",".github/workflows/03_weekly_report.yml"]
+FORBIDDEN_LEGACY_PATHS=[".github/workflows/stage2_morning.yml",".github/workflows/stage2_evening.yml",".github/workflows/stage2_weekly.yml",".github/workflows/morning_prediction.yml",".github/workflows/evening_evaluate_retrain.yml",".github/workflows/weekly_report.yml",".github/workflows/test_stage2.py",".github/workflows/stage4_tests.yml",".github/workflows/stage10_4_morning.yml",".github/workflows/stage10_4_evening.yml",".github/workflows/stage10_4_weekly.yml",".github/workflows/stage10_5_morning.yml",".github/workflows/stage10_5_evening.yml",".github/workflows/stage10_5_weekly.yml","main.py","morning.py","stage15_morning.py","config.py","weekly_report.py","evening.py","src/stage15.py","src/ranking.py","models/champion.pkl","reports/performance.csv","reports/weekly_report.csv","tests/test_stage2.py"]
 CORE_MODULES=["src.config","src.features","src.market_data","src.models","src.prediction","src.multihorizon","src.selection","src.stage4_engine","src.stage45_engine","src.final_intelligence","src.evaluation","src.retraining","src.ledger","src.morning_runner","src.evening","src.telegram_report","src.weekly_report","src.portfolio_report"]
 def test_required_source_files_exist():
     for path in REQUIRED_SOURCE_FILES: assert (ROOT/path).exists(),path
@@ -14,7 +14,7 @@ def test_current_workflows_exist():
 def test_legacy_paths_are_removed():
     for path in FORBIDDEN_LEGACY_PATHS: assert not (ROOT/path).exists(),path
 def test_exactly_three_production_workflows():
-    assert sorted(p.name for p in (ROOT/".github/workflows").glob("*.yml"))==["stage10_5_evening.yml","stage10_5_morning.yml","stage10_5_weekly.yml"]
+    assert sorted(p.name for p in (ROOT/".github/workflows").glob("*.yml"))==["01_morning_prediction.yml","02_evening_evaluation.yml","03_weekly_report.yml"]
 def test_core_modules_import():
     failures=[]
     for name in CORE_MODULES:
@@ -70,14 +70,14 @@ def test_final_action_guardrails():
 def test_final_manifest_contract():
     from src.final_intelligence import final_stage_manifest
     m=final_stage_manifest(); assert "Stage10.5" in m and "Stage10.4" not in m and "Validation" in m and "Abstention" in m and "Learning" in m
-def test_portfolio_engine_has_ai_target_chain():
+def test_portfolio_engine_prediction_chain():
     from src.portfolio_report import _attach_predictions,_plan_row
     pred=pd.DataFrame([{"Symbol":"TEST.NS","Pred_Close":120,"Pred_Open":118,"Pred_High":123,"Pred_Low":116,"Confidence":85,"Action":"BUY"}])
     base=pd.DataFrame([{"Stock":"TEST.NS","Ticker":"TEST.NS","Quantity":100.,"Average_Price":100.,"Reported_PnL":np.nan,"Reported_Return":np.nan}])
     import src.portfolio_report as pr
     old=pr._latest_predictions;pr._latest_predictions=lambda:(pred,"2026-09-04")
     try:
-        out,date=_attach_predictions(base);assert date=="2026-09-04" and float(out.loc[0,"AI_Target"])==120 and float(out.loc[0,"AI_High"])==123
+        out,date=_attach_predictions(base);assert date=="2026-09-04" and float(out.loc[0,"Pred_Close"])==120 and float(out.loc[0,"Pred_High"])==123
         row=pr._plan_row(base.iloc[0],pred.iloc[0],date);assert round(float(row["Profit_Target_Price"]),10)==110 and float(row["Projected_Return_At_AI_Target"])==20
     finally:pr._latest_predictions=old
 def test_morning_report_includes_buckets_and_portfolio_sections():
