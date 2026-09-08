@@ -80,10 +80,39 @@ def json_safe(value):
     if isinstance(value,Path):return str(value)
     if isinstance(value,float):return value if math.isfinite(value) else None
     raise TypeError(f"Unsupported type: {type(value)}")
+
+def _json_clean(value):
+    """Recursively convert pandas/NumPy values and replace non-finite numbers."""
+    if isinstance(value,dict):
+        return {str(k): _json_clean(v) for k,v in value.items()}
+    if isinstance(value,(list,tuple,set)):
+        return [_json_clean(v) for v in value]
+    if isinstance(value,pd.DataFrame):
+        return _json_clean(value.to_dict(orient="records"))
+    if isinstance(value,pd.Series):
+        return _json_clean(value.to_dict())
+    if value is None or isinstance(value,(str,bool,int)):
+        return value
+    if isinstance(value,(np.integer,)):
+        return int(value)
+    if isinstance(value,(np.floating,float)):
+        number=float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value,np.bool_):
+        return bool(value)
+    if isinstance(value,(pd.Timestamp,datetime,date)):
+        return value.isoformat()
+    if isinstance(value,Path):
+        return str(value)
+    return value
+
 def write_json(path,data):
     path=Path(path);tmp=path.with_suffix(".tmp")
-    with open(tmp,"w",encoding="utf-8") as f:json.dump(data,f,indent=2,default=json_safe,allow_nan=False)
+    cleaned=_json_clean(data)
+    with open(tmp,"w",encoding="utf-8") as f:
+        json.dump(cleaned,f,indent=2,allow_nan=False)
     tmp.replace(path)
+
 def read_json(path,default=None):
     path=Path(path)
     if not path.exists():return default
