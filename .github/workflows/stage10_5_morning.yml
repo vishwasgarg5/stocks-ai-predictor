@@ -32,9 +32,14 @@ jobs:
           pip install -r requirements.txt
       - name: Syntax check
         run: python -m py_compile src/*.py
-      - name: Run hardening, portfolio and market-outlook tests
+      - name: Run all Stage 10.5 regression tests
         run: |
-          python -m pytest -q tests/test_stage10_5.py tests/test_stage10_5_hardening.py tests/test_portfolio_report_schema.py tests/test_market_outlook.py
+          python -m pytest -q \
+            tests/test_stage10_5.py \
+            tests/test_stage10_5_hardening.py \
+            tests/test_stage10_5_trade_gating.py \
+            tests/test_portfolio_report_schema.py \
+            tests/test_market_outlook.py
       - name: Live market-data quality gate
         run: python -m src.live_quality_gate morning
       - name: Run Stage 10.5 morning prediction
