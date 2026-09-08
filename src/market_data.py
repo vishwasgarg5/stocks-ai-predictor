@@ -11,17 +11,14 @@ from .utils import clean_ohlcv
 NSE_EQUITY_URL="https://archives.nseindia.com/content/equities/EQUITY_L.csv"
 OHLCV_CACHE_DIR=DATA_DIR/"stage2"/"ohlcv"
 OHLCV_CACHE_DIR.mkdir(parents=True,exist_ok=True)
-
 def normalize_symbol(symbol):
     symbol=str(symbol).strip().upper(); return symbol[:-3] if symbol.endswith(".NS") else symbol
-
 def read_symbols_from_csv(path):
     try:
         df=pd.read_csv(path); column=next((c for c in ["SYMBOL","Symbol","symbol","Ticker","ticker"] if c in df.columns),None)
         if column is None:return []
         return list(dict.fromkeys(normalize_symbol(x) for x in df[column].dropna() if normalize_symbol(x) and normalize_symbol(x)!="SYMBOL"))
     except Exception:return []
-
 def download_nse_equity_list():
     try:
         r=requests.get(NSE_EQUITY_URL,timeout=20,headers={"User-Agent":"Mozilla/5.0","Accept":"text/csv,*/*"})
@@ -35,15 +32,12 @@ def download_nse_equity_list():
             if s and s!="SYMBOL" and s not in symbols:symbols.append(s)
         return symbols
     except Exception as exc:print(f"NSE universe download failed: {exc}");return []
-
 def load_universe():
     symbols=download_nse_equity_list()
-    if symbols:
-        print(f"Using full NSE equity universe: {len(symbols)} stocks");return symbols
+    if symbols:print(f"Using full NSE equity universe: {len(symbols)} stocks");return symbols
     for path in [Path(p) for p in UNIVERSE_FILES]:
         symbols=read_symbols_from_csv(path) if path.exists() else []
-        if symbols:
-            print(f"Using repository universe fallback: {len(symbols)} stocks");return symbols
+        if symbols:print(f"Using repository universe fallback: {len(symbols)} stocks");return symbols
     for module_name in ["src.nifty150_symbols","src.nifty150","src.market_universe"]:
         try:
             module=importlib.import_module(module_name)
@@ -52,7 +46,6 @@ def load_universe():
                 if values:return [normalize_symbol(x) for x in values]
         except Exception:continue
     raise RuntimeError("Unable to load NSE stock universe")
-
 def _cache_path(symbol):return OHLCV_CACHE_DIR/f"{normalize_symbol(symbol)}.csv"
 def _read_cached_ohlcv(symbol):
     path=_cache_path(symbol)
@@ -127,6 +120,22 @@ def _index_snapshot_with_fallback(key,cutoff=None):
         seen.add(symbol);snap=_index_snapshot(symbol,cutoff=cutoff)
         if np.isfinite(snap.get("Close",np.nan)):snap["IndexKey"]=key;return snap
     return {"Close":np.nan,"Change1D":np.nan,"Open":np.nan,"High":np.nan,"Low":np.nan,"High52W":np.nan,"Low52W":np.nan,"Source":"unavailable","IndexKey":key}
+def _install_extended_market_renderer(snapshot):
+    try:
+        from . import telegram_report as tr
+        def extended_market(snap,regime):
+            snap=snap or {};groups=[("BROAD",[("NIFTY","NIFTY"),("NXT50","NIFTYNEXT50"),("N100","NIFTY100"),("N200","NIFTY200"),("N500","NIFTY500"),("MID150","MIDCAP150"),("SMALL250","SMALLCAP250")]),("SECTOR",[("BANK","BANKNIFTY"),("FINN","FINNIFTY"),("IT","IT"),("AUTO","AUTO"),("PHARMA","PHARMA"),("METAL","METAL"),("ENERGY","ENERGY"),("REALTY","REALTY"),("PSUBANK","PSUBANK")])]
+            lines=["📊 *MARKET OVERVIEW*"]
+            for title,items in groups:
+                rows=[]
+                for label,key in items:
+                    x=snap.get(key,{}) or {};rows.append([label,tr._fmt(x.get("Close")),tr._pct(x.get("Change1D")),tr._fmt(x.get("High52W")),tr._fmt(x.get("Low52W"))])
+                lines += [f"*{title}*",*tr._table(["Index","Value","1D%","52W H","52W L"],rows,max_width=11)]
+            x=snap.get("VIX",{}) or {};b=snap.get("Breadth",{}) or {}
+            lines += [f"VIX: {tr._fmt(x.get('Close'))} | Breadth: {int(tr._num(b.get('Advancers'),0) or 0)}↑ / {int(tr._num(b.get('Decliners'),0) or 0)}↓ / {int(tr._num(b.get('Unchanged'),0) or 0)}= | A/D {tr._fmt(b.get('Ratio'),2)}",f"Regime: {regime or '-'}"]
+            return lines
+        tr._market=extended_market
+    except Exception as exc:print(f"Extended market renderer unavailable: {exc}")
 def get_market_snapshot(data_map=None,cutoff=None):
     snap={"NIFTY":_index_snapshot_with_fallback("NIFTY",cutoff),"BANKNIFTY":_index_snapshot_with_fallback("BANK",cutoff),"FINNIFTY":_index_snapshot_with_fallback("FINN",cutoff),"MIDCPNIFTY":_index_snapshot_with_fallback("MIDCP",cutoff),"VIX":_index_snapshot_with_fallback("VIX",cutoff)}
     for key in ("NIFTYNEXT50","NIFTY100","NIFTY200","NIFTY500","MIDCAP150","SMALLCAP250","IT","AUTO","PHARMA","METAL","ENERGY","REALTY","PSUBANK"):snap[key]=_index_snapshot_with_fallback(key,cutoff)
@@ -139,7 +148,7 @@ def get_market_snapshot(data_map=None,cutoff=None):
             a,b=float(df["Close"].iloc[-2]),float(df["Close"].iloc[-1]);ups+=b>a;downs+=b<a;unchanged+=b==a
         total=ups+downs;snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Unchanged":unchanged,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1) if total else 50}
     else:snap["Breadth"]={"Advancers":0,"Decliners":0,"Unchanged":0,"Ratio":0,"Score":50}
-    return snap
+    _install_extended_market_renderer(snap);return snap
 def get_completed_session_date(mode="morning",reference_date=None):
     df=get_nifty_data("1mo")
     if df.empty:return None
