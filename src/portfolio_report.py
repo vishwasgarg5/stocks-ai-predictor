@@ -80,9 +80,11 @@ def _num(row,name,default=np.nan):
 def _forecast_return(row):return [(h,_num(row,f"Horizon_{h}D")) for h in (1,3,5,7,10,20,60,90,180,365) if np.isfinite(_num(row,f"Horizon_{h}D"))]
 def _decision(current,avg,target,confidence,forecasts):
     if current is None or not np.isfinite(current) or not np.isfinite(avg) or avg<=0:return "WAIT","NO PRICE / COST DATA"
-    if not np.isfinite(target):return "WAIT","AI PREDICTION UNAVAILABLE"
-    if current>=avg*(1+TARGET_PROFIT_PCT/100):return "SELL","10% profit target reached"
-    if target>=avg*(1+TARGET_PROFIT_PCT/100) and current<avg:
+    if not np.isfinite(target):return "HOLD","AI PREDICTION UNAVAILABLE"
+    profit_target=avg*(1+TARGET_PROFIT_PCT/100.0)
+    tolerance=max(1e-9,abs(profit_target)*1e-10)
+    if current>=profit_target-tolerance:return "SELL","10% profit target reached"
+    if target>=profit_target and current<avg:
         strong=sum(v>=TARGET_PROFIT_PCT for _,v in forecasts)
         if strong>=2 and confidence>=MIN_AI_CONFIDENCE:return "HOLD","MULTI_HORIZON_CONFIRMED recovery"
         return "HOLD","AI recovery target remains above cost"
