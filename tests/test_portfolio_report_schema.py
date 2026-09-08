@@ -22,3 +22,8 @@ def test_decision_never_requires_missing_columns():
 def test_profit_target_is_sell():
     decision, _ = _decision(121.0, 110.0, 125.0, 80.0, [])
     assert decision == "SELL"
+
+
+def test_profit_target_has_precision_tolerance():
+    decision, _ = _decision(121.0 - 1e-10, 110.0, 125.0, 80.0, [])
+    assert decision == "SELL"
