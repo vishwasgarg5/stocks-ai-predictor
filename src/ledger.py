@@ -53,20 +53,24 @@ def mark_morning_report_sent(prediction_date):write_json(morning_report_path(pre
 
 def save_predictions(df,prediction_date,metadata=None):
     metadata=dict(metadata or {});metadata.setdefault("PredictionDate",str(prediction_date));metadata.setdefault("ModelVersion",MODEL_VERSION);metadata.setdefault("Stage",STAGE_NAME);path=prediction_path(prediction_date)
-    enriched=_baseline_columns(df,metadata)
-    if not _valid_prediction_ledger(enriched):raise ValueError("Prediction ledger failed identity/OHLC/selection integrity validation")
+    # Existing prediction sets are immutable. Check the persisted artifact first so a
+    # harmless re-run never validates/replaces a newly supplied dataframe.
     if path.exists():
         try:
             existing=pd.read_csv(path)
             if not existing.empty:
                 if not _valid_prediction_ledger(existing):raise ValueError("Existing prediction ledger is corrupt and will not be overwritten")
-                old_ids=set(existing["Prediction_ID"].astype(str));new_ids=set(enriched["Prediction_ID"].astype(str))
+                enriched=_baseline_columns(df,metadata)
+                new_ids=set(enriched.get("Prediction_ID",pd.Series(dtype=str)).astype(str))
+                old_ids=set(existing["Prediction_ID"].astype(str))
                 if old_ids!=new_ids:raise ValueError("Prediction ledger is immutable: existing Prediction_ID set differs")
                 return path
         except ValueError:raise
         except Exception as exc:raise ValueError(f"Existing prediction ledger unreadable: {exc}")
+    enriched=_baseline_columns(df,metadata)
+    if not _valid_prediction_ledger(enriched):raise ValueError("Prediction ledger failed identity/OHLC/selection integrity validation")
     path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
-    metadata["PredictionLedgerVersion"]="v7";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();metadata["SelectionIntegrity"]={"MaxStocks":int(PREDICTION_TOP_N),"MaxPerPriceBucket":int(MAX_PER_PRICE_BUCKET)};write_json(path.with_suffix(".json"),metadata);return path
+    metadata["PredictionLedgerVersion"]="v8";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();metadata["SelectionIntegrity"]={"MaxStocks":int(PREDICTION_TOP_N),"MaxPerPriceBucket":int(MAX_PER_PRICE_BUCKET)};write_json(path.with_suffix(".json"),metadata);return path
 
 def load_predictions(prediction_date):
     path=prediction_path(prediction_date)
