@@ -1,148 +1,256 @@
-"""Stage 10.5 Portfolio Manager: position-aware targets, averaging and dynamic exit timing."""
+"""Stage 10.5 portfolio manager.
+
+Design goals:
+- deterministic schema: every output row always has Decision/PnL/Return_Pct
+- use repository OHLCV cache before Yahoo Finance
+- never train models or make 5y downloads just to render the morning report
+- consume the exact latest prediction artifact when available
+- conservative averaging and 10% profit-target logic
+"""
 from pathlib import Path
 import re
 import numpy as np
 import pandas as pd
-import yfinance as yf
-from .config import PREDICTIONS_DIR, HISTORY_PERIOD
-from .prediction import train_stock_bundle, predict_stock, add_multihorizon_predictions
-from .market_data import download_symbol
-from .portfolio_long_horizon import train_portfolio_long_horizon_models, predict_portfolio_long_horizons, PORTFOLIO_LONG_HORIZONS
-from .quality_controls import confirm_portfolio_target
-from .utils import is_nse_trading_day, next_nse_trading_day
-ROOT=Path(__file__).resolve().parents[1]
-PORTFOLIO_FILE=ROOT/"portfolio_manager"/"data"/"my_portfolio.csv"
-NAME_TO_TICKER={"RELIANCE INDUSTRIES":"RELIANCE.NS","RELIANCE":"RELIANCE.NS","VEDANTA IRON & STEEL":"VEDL.NS","VEDANTA":"VEDL.NS","YES BANK":"YESBANK.NS","IRFC":"IRFC.NS","NTPC":"NTPC.NS","TATA POWER":"TATAPOWER.NS","WIPRO":"WIPRO.NS","PALASH SECURITIES":"PALASHSECU.NS","OLA ELECTRIC MOBILITY":"OLAELEC.NS","STAR CEMENT":"STARCEMENT.NS","SJVN":"SJVN.NS","RELIANCE POWER":"RPOWER.NS","IRCTC":"IRCTC.NS","SEPC":"SEPC.NS","INDIAN RENEWABLE ENERGY":"IREDA.NS","IREDA":"IREDA.NS"}
-TARGET_PROFIT_PCT=10.0
-MAX_AVERAGING_CAPITAL_PCT=25.0
-MIN_AI_CONFIDENCE=60.0
-SELL_RISK_GAP_PCT=3.0
-SHORT_HORIZONS=(1,3,5,7,20)
-HORIZONS=SHORT_HORIZONS+PORTFOLIO_LONG_HORIZONS
+
+ROOT = Path(__file__).resolve().parents[1]
+PORTFOLIO_FILE = ROOT / "portfolio_manager" / "data" / "my_portfolio.csv"
+OHLCV_DIR = ROOT / "data" / "ohlcv"
+PREDICTIONS_DIR = ROOT / "data" / "stage2" / "predictions"
+
+TARGET_PROFIT_PCT = 10.0
+MAX_AVERAGING_CAPITAL_PCT = 25.0
+MIN_AI_CONFIDENCE = 60.0
+SELL_RISK_GAP_PCT = 3.0
+
+NAME_TO_TICKER = {
+    "RELIANCE INDUSTRIES": "RELIANCE.NS", "RELIANCE": "RELIANCE.NS",
+    "VEDANTA IRON & STEEL": "VEDL.NS", "VEDANTA": "VEDL.NS",
+    "YES BANK": "YESBANK.NS", "IRFC": "IRFC.NS", "NTPC": "NTPC.NS",
+    "TATA POWER": "TATAPOWER.NS", "WIPRO": "WIPRO.NS",
+    "PALASH SECURITIES": "PALASHSECU.NS", "OLA ELECTRIC MOBILITY": "OLAELEC.NS",
+    "STAR CEMENT": "STARCEMENT.NS", "SJVN": "SJVN.NS",
+    "RELIANCE POWER": "RPOWER.NS", "IRCTC": "IRCTC.NS", "SEPC": "SEPC.NS",
+    "INDIAN RENEWABLE ENERGY": "IREDA.NS", "IREDA": "IREDA.NS",
+}
+
+# Stable public schema used by morning_runner and Telegram.
+OUTPUT_COLUMNS = [
+    "Stock", "Ticker", "Quantity", "Average_Price", "Current_Price",
+    "Invested_Value", "Current_Value", "PnL", "Current_PnL_INR", "Return_Pct",
+    "AI_Target", "AI_Confidence", "AI_Direction", "Decision", "Sell_Window",
+    "Profit_Target_Price", "Sell_Target_Price", "Recommended_Qty",
+    "New_Average_Price", "Projected_Return_At_AI_Target", "Recovery_Gap_Pct",
+    "Sell_Reason", "PredictionDate", "PriceSource",
+]
+
 
 def _ticker(value):
-    raw=str(value).strip();key=re.sub(r"\s+"," ",raw.upper())
-    if key in NAME_TO_TICKER:return NAME_TO_TICKER[key]
-    if raw.upper().endswith(".NS"):return raw.upper()
-    return raw.upper().replace(" & ","").replace(" ","")+".NS"
-def _canonical_ticker(value):
-    raw=str(value).strip().upper()
-    if not raw or raw in {"NAN","NONE","<NA>"}:return ""
-    return raw if raw.endswith(".NS") else raw+".NS"
-def _symbol(ticker):return str(ticker).upper().removesuffix(".NS")
+    raw = str(value).strip()
+    key = re.sub(r"\s+", " ", raw.upper())
+    if key in NAME_TO_TICKER:
+        return NAME_TO_TICKER[key]
+    if raw.upper().endswith(".NS"):
+        return raw.upper()
+    return raw.upper().replace(" & ", "").replace(" ", "") + ".NS"
+
+
+def _symbol(ticker):
+    return str(ticker).upper().removesuffix(".NS")
+
+
 def load_portfolio():
-    if not PORTFOLIO_FILE.exists():return pd.DataFrame()
-    df=pd.read_csv(PORTFOLIO_FILE);source_col="Symbol" if "Symbol" in df.columns else "Stock"
-    if {source_col,"Quantity","Average_Price"}.issubset(df.columns):out=df[[source_col,"Quantity","Average_Price"]].copy().rename(columns={source_col:"Stock"});out["Reported_PnL"]=pd.NA;out["Reported_Return"]=pd.NA
-    elif {source_col,"Quantity","Current_PnL_INR","Return_Percent"}.issubset(df.columns):out=df[[source_col,"Quantity","Current_PnL_INR","Return_Percent"]].copy().rename(columns={source_col:"Stock","Current_PnL_INR":"Reported_PnL","Return_Percent":"Reported_Return"});out["Average_Price"]=pd.NA
-    else:return pd.DataFrame()
-    for c in ["Quantity","Average_Price","Reported_PnL","Reported_Return"]:out[c]=pd.to_numeric(out[c],errors="coerce")
-    out["Quantity"]=out["Quantity"].fillna(0);out["Ticker"]=out["Stock"].map(_ticker);out["Stock"]=out["Ticker"].map(_symbol);return out
-def _price(ticker):
+    if not PORTFOLIO_FILE.exists():
+        return pd.DataFrame(columns=["Stock", "Ticker", "Quantity", "Average_Price", "Reported_PnL", "Reported_Return"])
     try:
-        d=yf.download(ticker,period="5d",interval="1d",auto_adjust=False,progress=False,threads=False)
-        if d is None or d.empty:return None
-        if isinstance(d.columns,pd.MultiIndex):d=d.xs(ticker,axis=1,level=-1) if ticker in d.columns.get_level_values(-1) else d.droplevel(-1,axis=1)
-        s=pd.to_numeric(d["Close"],errors="coerce").dropna();return float(s.iloc[-1]) if not s.empty else None
-    except Exception:return None
+        src = pd.read_csv(PORTFOLIO_FILE)
+    except Exception:
+        return pd.DataFrame(columns=["Stock", "Ticker", "Quantity", "Average_Price", "Reported_PnL", "Reported_Return"])
+
+    source_col = "Symbol" if "Symbol" in src.columns else "Stock" if "Stock" in src.columns else None
+    if source_col is None or "Quantity" not in src.columns:
+        return pd.DataFrame(columns=["Stock", "Ticker", "Quantity", "Average_Price", "Reported_PnL", "Reported_Return"])
+
+    out = pd.DataFrame()
+    out["Stock"] = src[source_col].astype(str).str.strip()
+    out["Quantity"] = pd.to_numeric(src["Quantity"], errors="coerce").fillna(0)
+    out["Average_Price"] = pd.to_numeric(src.get("Average_Price", np.nan), errors="coerce")
+    out["Reported_PnL"] = pd.to_numeric(src.get("Current_PnL_INR", np.nan), errors="coerce")
+    out["Reported_Return"] = pd.to_numeric(src.get("Return_Percent", np.nan), errors="coerce")
+    out["Ticker"] = out["Stock"].map(_ticker)
+    out["Stock"] = out["Ticker"].map(_symbol)
+    return out
+
+
+def _cached_price(ticker):
+    path = OHLCV_DIR / f"{_symbol(ticker)}.csv"
+    try:
+        if not path.exists():
+            return None, "UNAVAILABLE"
+        d = pd.read_csv(path)
+        if d.empty or "Close" not in d.columns:
+            return None, "UNAVAILABLE"
+        s = pd.to_numeric(d["Close"], errors="coerce").dropna()
+        if s.empty:
+            return None, "UNAVAILABLE"
+        return float(s.iloc[-1]), "GITHUB_OHLCV"
+    except Exception:
+        return None, "UNAVAILABLE"
+
+
 def _latest_predictions():
-    files=sorted(PREDICTIONS_DIR.glob("predictions_*.csv"))
+    files = sorted(PREDICTIONS_DIR.glob("predictions_*.csv"), key=lambda p: p.stat().st_mtime)
     for path in reversed(files):
         try:
-            df=pd.read_csv(path)
-            if not df.empty and "Symbol" in df.columns:return df,path.stem.replace("predictions_","")
-        except Exception:continue
-    return pd.DataFrame(),None
-def _portfolio_ai_predictions(df,pred_date):
-    if df.empty or not pred_date:return df
-    need=df.index[df.get("Horizon_365D",pd.Series(index=df.index,dtype=float)).isna()].tolist()
-    for i in need:
-        ticker=df.at[i,"Ticker"];symbol=_symbol(ticker)
-        try:
-            history=download_symbol(ticker,HISTORY_PERIOD)
-            if history is None or history.empty:continue
-            if pd.isna(df.at[i,"AI_Target"]):
-                bundle=train_stock_bundle(history,symbol,pred_date,"A",train_horizons=True);result=predict_stock(history,bundle,pred_date);horizons=add_multihorizon_predictions(history,bundle,pred_date)
-                df.at[i,"AI_Target"]=result.get("Pred_Close");df.at[i,"AI_Open"]=result.get("Pred_Open");df.at[i,"AI_High"]=result.get("Pred_High");df.at[i,"AI_Low"]=result.get("Pred_Low");df.at[i,"AI_Confidence"]=result.get("Confidence");df.at[i,"AI_Direction"]=result.get("Direction")
-                for _,hr in horizons.iterrows():df.at[i,f"Horizon_{int(hr['HorizonDays'])}D"]=float(hr["Expected_Return"])
-            long_history=download_symbol(ticker,"5y")
-            if long_history is None or long_history.empty:long_history=history
-            long_bundle=train_portfolio_long_horizon_models(long_history,pred_date);long_forecasts=predict_portfolio_long_horizons(long_history,long_bundle,pred_date)
-            for _,hr in long_forecasts.iterrows():df.at[i,f"Horizon_{int(hr['HorizonDays'])}D"]=float(hr["Expected_Return"])
-        except Exception as exc:print(f"Portfolio extended forecast warning {symbol}: {exc}")
-    return df
-def _attach_predictions(df):
-    pred,pred_date=_latest_predictions()
-    for h in HORIZONS:df[f"Horizon_{h}D"]=np.nan
-    if pred.empty:
-        df["AI_Target"]=np.nan;return _portfolio_ai_predictions(df,pred_date),pred_date
-    keep=[c for c in ["Symbol","Pred_Close","Pred_Open","Pred_High","Pred_Low","Confidence","CalibratedConfidence","Direction","FinalDecisionScore","Action",*[f"Horizon_{h}D" for h in SHORT_HORIZONS]] if c in pred.columns]
-    p=pred[keep].copy();p["Ticker"]=p["Symbol"].map(_canonical_ticker);p=p.drop(columns=["Symbol"]).rename(columns={"Pred_Close":"AI_Target","Pred_Open":"AI_Open","Pred_High":"AI_High","Pred_Low":"AI_Low","Action":"AI_Action"}).drop_duplicates(subset=["Ticker"],keep="last")
-    for c in ["AI_Target","AI_Open","AI_High","AI_Low",*[f"Horizon_{h}D" for h in SHORT_HORIZONS]]:
-        if c in p:p[c]=pd.to_numeric(p[c],errors="coerce")
-    merged=df.merge(p,on="Ticker",how="left");return _portfolio_ai_predictions(merged,pred_date),pred_date
-def _is_nse_trading_day(date):return is_nse_trading_day(date)
-def _next_trading_date(start_date,sessions):
-    if not start_date:return "-"
-    d=pd.Timestamp(start_date).date()
-    for _ in range(int(sessions)):d=next_nse_trading_day(d)
-    return str(d)
-def _confirmed_target(row):
-    forecasts={}
-    for h in (60,90,180,365):
-        try:
-            v=float(row.get(f"Horizon_{h}D"))
-            if np.isfinite(v):forecasts[h]=v
-        except (TypeError,ValueError):pass
-    policy=confirm_portfolio_target(forecasts,TARGET_PROFIT_PCT)
-    return float(policy["TargetPct"]),policy
-def _sell_plan(row,current,avg,prediction_date):
-    if current is None or pd.isna(current) or pd.isna(avg) or not prediction_date:return TARGET_PROFIT_PCT,None,"NO AI DATA","-","NO AI DATA"
-    confidence=float(row.get("AI_Confidence",row.get("CalibratedConfidence",row.get("Confidence",0))) or 0);forecasts=[]
-    for h in HORIZONS:
-        try:
-            value=float(row.get(f"Horizon_{h}D"))
-            if np.isfinite(value):forecasts.append((h,value))
-        except (TypeError,ValueError):pass
-    confirmed_target,policy=_confirmed_target(row);row["Portfolio_Target_Pct"]=confirmed_target;row["Portfolio_Target_Status"]=policy["Status"];row["Portfolio_Target_Horizons"]=",".join(map(str,policy.get("ConfirmedHorizons",[]))) or "-"
-    if not forecasts:return confirmed_target,float(avg)*(1+confirmed_target/100),"NO HORIZON EVIDENCE","-","WAIT"
-    reliable=[(h,v) for h,v in forecasts if v>=confirmed_target and confidence>=MIN_AI_CONFIDENCE]
-    if reliable:target_h,target_return=max(reliable,key=lambda x:x[1])
-    else:
-        reached=[(h,v) for h,v in forecasts if v>=confirmed_target]
-        if not reached:return confirmed_target,float(avg)*(1+confirmed_target/100),f"{policy['Status']}","-","WAIT"
-        target_h,target_return=min(reached,key=lambda x:x[0]);target_return=confirmed_target
-    target_price=float(avg)*(1+target_return/100);sell_date=_next_trading_date(prediction_date,target_h);return float(target_return),target_price,f"{target_h}D ({sell_date})",sell_date,"TARGET_DATE"
-def _average_plan(row):
-    qty=float(row["Quantity"] or 0);price=row["Current_Price"];avg=row["Average_Price"];target=row.get("AI_Target")
-    if pd.isna(avg) and price is not None and pd.notna(row["Reported_Return"]) and float(row["Reported_Return"])>-100:avg=price/(1+float(row["Reported_Return"])/100);row["Average_Price"]=avg;row["AveragePriceSource"]="ESTIMATED_FROM_RETURN"
-    elif pd.isna(avg) and price is not None and qty>0 and pd.notna(row["Reported_PnL"]):avg=price-float(row["Reported_PnL"])/qty;row["Average_Price"]=avg;row["AveragePriceSource"]="ESTIMATED_FROM_PNL"
-    elif pd.notna(avg):row["AveragePriceSource"]="CSV"
-    else:row["AveragePriceSource"]="UNAVAILABLE"
-    row["Profit_Target_Price"]=float(avg)*(1+TARGET_PROFIT_PCT/100) if pd.notna(avg) else None
-    if price is None or pd.isna(avg) or qty<=0:
-        row.update({"Invested_Value":qty*avg if pd.notna(avg) else 0,"Recovery_Gap_Pct":None,"Target_Return_Pct":None,"Recommended_Qty":0,"New_Average_Price":None,"Projected_Return_At_AI_Target":None,"Averaging_Action":"DATA WAIT","Decision":"DATA WAIT","Sell_Window":"NO PRICE","Sell_Reason":"Insufficient portfolio/price data"});return row
-    row["Invested_Value"]=qty*float(avg);row["Recovery_Gap_Pct"]=(float(avg)-price)/float(avg)*100 if avg else None
-    if pd.isna(target):
-        row.update({"Target_Return_Pct":None,"Recommended_Qty":0,"New_Average_Price":float(avg),"Projected_Return_At_AI_Target":None,"Averaging_Action":"DO NOT AVG","Decision":"HOLD","Sell_Window":"NO AI DATA","Sell_Reason":"AI forecast unavailable for this holding"});return row
-    target=float(target);row["Target_Return_Pct"]=(target/float(avg)-1)*100;target_return,target_price,sell_window,sell_date,sell_status=_sell_plan(row,price,float(avg),row.get("PredictionDate"));row["Sell_Target_Profit_Pct"]=target_return;row["Sell_Target_Price"]=target_price;row["Sell_Date"]=sell_date;row["Profit_Target_Price"]=target_price;row["Sell_Window"]=f"+{target_return:.1f}% | ₹{target_price:,.2f} | {sell_date}" if sell_date!="-" else f"+{target_return:.1f}% | ₹{target_price:,.2f} | WAIT"
-    if price>=target_price:
-        row.update({"Recommended_Qty":0,"New_Average_Price":float(avg),"Projected_Return_At_AI_Target":(target/avg-1)*100,"Averaging_Action":"DO NOT AVG","Decision":"SELL","Sell_Window":"NOW","Sell_Date":str(row.get("PredictionDate") or "TODAY"),"Sell_Reason":f"Confirmed {target_return:.1f}% target reached; {row.get('Portfolio_Target_Status','TARGET_POLICY')}"});return row
-    desired_avg=target/(1+target_return/100)
-    if desired_avg<=price or target<=price*(1-SELL_RISK_GAP_PCT/100):
-        row.update({"Recommended_Qty":0,"New_Average_Price":float(avg),"Projected_Return_At_AI_Target":(target/avg-1)*100,"Averaging_Action":"DO NOT AVG","Decision":"SELL" if target<price*(1-SELL_RISK_GAP_PCT/100) else "HOLD","Sell_Window":"NOW" if target<price*(1-SELL_RISK_GAP_PCT/100) else row["Sell_Window"],"Sell_Reason":"AI target does not support a safe recovery target"});return row
-    required=qty*(float(avg)-desired_avg)/(desired_avg-price);budget=qty*float(avg)*MAX_AVERAGING_CAPITAL_PCT/100;max_qty=int(budget//price);rec=min(max(0,int(required+0.9999)),max_qty);new_avg=(qty*float(avg)+rec*price)/(qty+rec) if rec>0 else float(avg);projected=(target/new_avg-1)*100
-    row["Recommended_Qty"]=rec;row["New_Average_Price"]=new_avg;row["Projected_Return_At_AI_Target"]=projected;row["Max_Averaging_Capital"]=budget
-    if rec>0 and projected>=target_return and float(row.get("AI_Confidence",0) or 0)>=MIN_AI_CONFIDENCE and row["Recovery_Gap_Pct"]>=5:row["Averaging_Action"]="AVERAGE";row["Decision"]="AVG";row["Sell_Reason"]="Confirmed multi-horizon recovery supports reduced average and target"
-    elif row["Recovery_Gap_Pct"]<=0:row["Averaging_Action"]="DO NOT AVG";row["Decision"]="HOLD";row["Sell_Reason"]="Position is not below average cost"
-    else:row["Averaging_Action"]="DO NOT AVG";row["Decision"]="HOLD";row["Sell_Reason"]="Recovery target not strong enough or confidence is low"
-    if sell_status=="WAIT":row["Decision"]="HOLD";row["Sell_Reason"]="Confirmed target lacks sufficient forecast evidence; reassess after new data"
-    return row
+            d = pd.read_csv(path)
+            if not d.empty and "Symbol" in d.columns:
+                d["Ticker"] = d["Symbol"].astype(str).map(lambda x: _ticker(x))
+                return d, path.stem.replace("predictions_", "")
+        except Exception:
+            continue
+    return pd.DataFrame(), None
+
+
+def _num(row, name, default=np.nan):
+    try:
+        v = float(row.get(name, default))
+        return v if np.isfinite(v) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _forecast_return(row):
+    # Prefer the short multi-horizon forecasts already produced by the morning model.
+    vals = []
+    for h in (1, 3, 5, 7, 20):
+        v = _num(row, f"Horizon_{h}D")
+        if np.isfinite(v):
+            vals.append((h, v))
+    if vals:
+        return vals
+    # Older artifacts may expose Expected_Return instead.
+    v = _num(row, "Expected_Return")
+    return [(1, v)] if np.isfinite(v) else []
+
+
+def _decision(current, avg, target, confidence, forecasts):
+    if current is None or not np.isfinite(current) or not np.isfinite(avg) or avg <= 0:
+        return "WAIT", "NO PRICE / COST DATA"
+    if not np.isfinite(target):
+        return "HOLD", "AI TARGET UNAVAILABLE"
+
+    target_gap = (target / avg - 1.0) * 100.0
+    recovery_gap = (avg - current) / avg * 100.0
+
+    # Profit-book only when the model target itself is already at/above the cost target.
+    if current >= avg * (1 + TARGET_PROFIT_PCT / 100):
+        return "SELL", "10% profit target already reached"
+    if current >= target and target > avg:
+        return "SELL", "AI target reached"
+    if target < current * (1 - SELL_RISK_GAP_PCT / 100):
+        return "SELL", "AI target is materially below current price"
+
+    positive = [v for _, v in forecasts if np.isfinite(v) and v >= TARGET_PROFIT_PCT]
+    if recovery_gap >= 5 and positive and confidence >= MIN_AI_CONFIDENCE:
+        return "AVG", "Multi-horizon recovery supports limited averaging"
+    if target_gap >= TARGET_PROFIT_PCT and recovery_gap > 0:
+        return "HOLD", "Recovery target remains above cost"
+    return "HOLD", "No sufficiently strong recovery confirmation"
+
+
+def _plan_row(row, pred_row, prediction_date):
+    ticker = row["Ticker"]
+    current, price_source = _cached_price(ticker)
+    qty = float(row.get("Quantity", 0) or 0)
+    avg = row.get("Average_Price", np.nan)
+    reported_pnl = row.get("Reported_PnL", np.nan)
+    reported_return = row.get("Reported_Return", np.nan)
+
+    if pd.isna(avg) and current is not None and pd.notna(reported_return) and float(reported_return) > -100:
+        avg = current / (1 + float(reported_return) / 100)
+    if pd.isna(avg) and current is not None and qty > 0 and pd.notna(reported_pnl):
+        avg = current - float(reported_pnl) / qty
+
+    target = _num(pred_row, "Pred_Close") if pred_row is not None else np.nan
+    confidence = _num(pred_row, "CalibratedConfidence", _num(pred_row, "Confidence", 0)) if pred_row is not None else 0.0
+    direction = str(pred_row.get("Direction", "-")) if pred_row is not None else "-"
+    forecasts = _forecast_return(pred_row) if pred_row is not None else []
+
+    invested = qty * float(avg) if pd.notna(avg) else 0.0
+    current_value = qty * current if current is not None else 0.0
+    pnl = current_value - invested
+    ret = pnl / invested * 100 if invested > 0 else np.nan
+    profit_target = float(avg) * (1 + TARGET_PROFIT_PCT / 100) if pd.notna(avg) else np.nan
+    recovery_gap = ((float(avg) - current) / float(avg) * 100) if current is not None and pd.notna(avg) and float(avg) else np.nan
+
+    decision, reason = _decision(current, float(avg) if pd.notna(avg) else np.nan, target, confidence, forecasts)
+    recommended_qty = 0
+    new_avg = float(avg) if pd.notna(avg) else np.nan
+
+    if decision == "AVG" and current is not None and pd.notna(avg) and np.isfinite(target):
+        positive = max((v for _, v in forecasts if np.isfinite(v) and v >= TARGET_PROFIT_PCT), default=TARGET_PROFIT_PCT)
+        desired_avg = target / (1 + positive / 100)
+        if desired_avg > current:
+            required = qty * (float(avg) - desired_avg) / (desired_avg - current) if desired_avg > current else 0
+            budget = qty * float(avg) * MAX_AVERAGING_CAPITAL_PCT / 100
+            max_qty = int(max(0, budget // current)) if current > 0 else 0
+            recommended_qty = min(max(0, int(np.ceil(required))), max_qty)
+            if recommended_qty:
+                new_avg = (qty * float(avg) + recommended_qty * current) / (qty + recommended_qty)
+            else:
+                decision = "HOLD"
+                reason = "Averaging cap does not justify additional quantity"
+
+    target_price = float(target) if np.isfinite(target) else np.nan
+    projected = ((target / new_avg) - 1) * 100 if np.isfinite(target) and np.isfinite(new_avg) and new_avg else np.nan
+    sell_window = "NOW" if decision == "SELL" else ("MONITOR" if np.isfinite(target_price) else "NO AI DATA")
+
+    return {
+        "Stock": _symbol(ticker), "Ticker": ticker, "Quantity": int(qty),
+        "Average_Price": avg, "Current_Price": current, "Invested_Value": invested,
+        "Current_Value": current_value, "PnL": pnl, "Current_PnL_INR": pnl,
+        "Return_Pct": ret, "AI_Target": target, "AI_Confidence": confidence,
+        "AI_Direction": direction, "Decision": decision, "Sell_Window": sell_window,
+        "Profit_Target_Price": target_price if np.isfinite(target_price) else profit_target,
+        "Sell_Target_Price": target_price, "Recommended_Qty": recommended_qty,
+        "New_Average_Price": new_avg, "Projected_Return_At_AI_Target": projected,
+        "Recovery_Gap_Pct": recovery_gap, "Sell_Reason": reason,
+        "PredictionDate": prediction_date or "-", "PriceSource": price_source,
+    }
+
+
 def portfolio_snapshot():
-    df=load_portfolio()
-    if df.empty:return df,{"Positions":0,"Value":0.0,"PnL":0.0,"Return":0.0,"ActionCounts":{}}
-    prices={t:_price(t) for t in df["Ticker"].dropna().unique()};df["Current_Price"]=df["Ticker"].map(prices);df,prediction_date=_attach_predictions(df);df["PredictionDate"]=prediction_date;df["AveragePriceSource"]="UNAVAILABLE";df=df.apply(_average_plan,axis=1)
-    df["Decision"]=df["Decision"].map(lambda x:{"SELL / PROFIT BOOK":"SELL","SELL / EXIT":"SELL","HOLD / RECOVERY":"HOLD","DATA WAIT":"WAIT"}.get(str(x),str(x).strip().split()[0] if str(x).strip() else "WAIT"))
-    df["Current_Value"]=df["Quantity"]*df["Current_Price"].fillna(0);df["Current_PnL_INR"]=df["Current_Value"]-df["Invested_Value"];df["Return_Percent"]=np.where(df["Invested_Value"]>0,df["Current_PnL_INR"]/df["Invested_Value"]*100,np.nan)
-    total_value=float(df["Current_Value"].sum());total_invested=float(df["Invested_Value"].sum());total_pnl=total_value-total_invested;summary={"Positions":int(len(df)),"Value":total_value,"PnL":total_pnl,"Return":(total_pnl/total_invested*100 if total_invested else 0.0),"ActionCounts":df["Decision"].value_counts().to_dict()}
-    return df,summary
+    portfolio = load_portfolio()
+    empty_summary = {"Positions": 0, "Value": 0.0, "PnL": 0.0, "Return": 0.0, "ActionCounts": {}}
+    if portfolio.empty:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS), empty_summary
+
+    predictions, prediction_date = _latest_predictions()
+    pred_by_ticker = {}
+    if not predictions.empty:
+        for _, r in predictions.drop_duplicates("Ticker", keep="last").iterrows():
+            pred_by_ticker[str(r["Ticker"])] = r
+
+    rows = []
+    for _, row in portfolio.iterrows():
+        rows.append(_plan_row(row, pred_by_ticker.get(str(row["Ticker"])), prediction_date))
+
+    df = pd.DataFrame(rows)
+    for c in OUTPUT_COLUMNS:
+        if c not in df.columns:
+            df[c] = np.nan
+    df = df[OUTPUT_COLUMNS]
+    # Canonical aliases prevent downstream KeyError regardless of report version.
+    df["PnL"] = pd.to_numeric(df["PnL"], errors="coerce").fillna(0.0)
+    df["Current_PnL_INR"] = df["PnL"]
+    df["Return_Pct"] = pd.to_numeric(df["Return_Pct"], errors="coerce")
+    df["Decision"] = df["Decision"].fillna("WAIT").astype(str)
+
+    total_value = float(pd.to_numeric(df["Current_Value"], errors="coerce").fillna(0).sum())
+    total_invested = float(pd.to_numeric(df["Invested_Value"], errors="coerce").fillna(0).sum())
+    total_pnl = total_value - total_invested
+    summary = {
+        "Positions": int(len(df)), "Value": total_value, "PnL": total_pnl,
+        "Return": total_pnl / total_invested * 100 if total_invested else 0.0,
+        "ActionCounts": df["Decision"].value_counts().to_dict(), "Available": True,
+    }
+    return df, summary
