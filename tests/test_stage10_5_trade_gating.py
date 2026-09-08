@@ -2,6 +2,7 @@ import pandas as pd
 
 from src.selection import select_top_stocks
 
+# Regression coverage for Stage 10.5 v1.2 strict trade gating.
 
 def _row(symbol, expected, multi, direction="UP"):
     return {
