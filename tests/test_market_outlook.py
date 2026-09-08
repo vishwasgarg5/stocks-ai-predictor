@@ -24,3 +24,12 @@ def test_market_regime_returns_bear_for_strong_downtrend(monkeypatch):
     result=get_market_regime()
     assert result["name"]=="BEAR"
     assert 0 <= result["score"] <= 100
+    assert 0 <= result["confidence"] <= 100
+
+
+def test_market_regime_confidence_exists_for_short_data(monkeypatch):
+    values=np.linspace(100,105,40)
+    monkeypatch.setattr("src.market_data.get_nifty_data",lambda *args,**kwargs:_frame(values))
+    result=get_market_regime()
+    assert result["name"]=="SIDEWAYS"
+    assert 0 <= result["confidence"] <= 100
