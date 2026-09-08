@@ -131,8 +131,8 @@ def _install_extended_market_renderer(snapshot):
                 for label,key in items:
                     x=snap.get(key,{}) or {};rows.append([label,tr._fmt(x.get("Close")),tr._pct(x.get("Change1D")),tr._fmt(x.get("High52W")),tr._fmt(x.get("Low52W"))])
                 lines += [f"*{title}*",*tr._table(["Index","Value","1D%","52W H","52W L"],rows,max_width=11)]
-            x=snap.get("VIX",{}) or {};b=snap.get("Breadth",{}) or {}
-            lines += [f"VIX: {tr._fmt(x.get('Close'))} | Breadth: {int(tr._num(b.get('Advancers'),0) or 0)}↑ / {int(tr._num(b.get('Decliners'),0) or 0)}↓ / {int(tr._num(b.get('Unchanged'),0) or 0)}= | A/D {tr._fmt(b.get('Ratio'),2)}",f"Regime: {regime or '-'}"]
+            x=snap.get("VIX",{}) or {};b=snap.get("Breadth",{}) or {};r=snap.get("RegimePrediction") or {};regime_text=r.get("name") if isinstance(r,dict) else (regime or "-");conf=r.get("confidence") if isinstance(r,dict) else None;suffix=f" | Conf {tr._fmt(conf,1)}%" if conf is not None else ""
+            lines += [f"VIX: {tr._fmt(x.get('Close'))} | Breadth: {int(tr._num(b.get('Advancers'),0) or 0)}↑ / {int(tr._num(b.get('Decliners'),0) or 0)}↓ / {int(tr._num(b.get('Unchanged'),0) or 0)}= | A/D {tr._fmt(b.get('Ratio'),2)}",f"Regime: {regime_text}{suffix}"]
             return lines
         tr._market=extended_market
     except Exception as exc:print(f"Extended market renderer unavailable: {exc}")
@@ -148,7 +148,7 @@ def get_market_snapshot(data_map=None,cutoff=None):
             a,b=float(df["Close"].iloc[-2]),float(df["Close"].iloc[-1]);ups+=b>a;downs+=b<a;unchanged+=b==a
         total=ups+downs;snap["Breadth"]={"Advancers":ups,"Decliners":downs,"Unchanged":unchanged,"Ratio":ups/max(downs,1),"Score":100*ups/max(total,1) if total else 50}
     else:snap["Breadth"]={"Advancers":0,"Decliners":0,"Unchanged":0,"Ratio":0,"Score":50}
-    _install_extended_market_renderer(snap);return snap
+    snap["RegimePrediction"]=get_market_regime(cutoff);_install_extended_market_renderer(snap);return snap
 def get_completed_session_date(mode="morning",reference_date=None):
     df=get_nifty_data("1mo")
     if df.empty:return None
@@ -169,14 +169,18 @@ def get_previous_session_date(session_date):
     if df.empty:return None
     dates=sorted({pd.Timestamp(x).date() for x in df.index});previous=[x for x in dates if x<session_date];return max(previous) if previous else None
 def get_market_regime(cutoff_date=None):
-    df=get_nifty_data("4mo")
-    if df.empty:return {"name":"UNKNOWN","score":50}
-    if cutoff_date is not None:df=df[df.index.date<=cutoff_date]
-    if len(df)<60:return {"name":"NORMAL","score":50}
-    close=df["Close"];sma20=close.rolling(20).mean().iloc[-1];sma50=close.rolling(50).mean().iloc[-1];vol=close.pct_change().rolling(20).std().iloc[-1];current=close.iloc[-1]
-    regime="BULL" if current>sma20>sma50 else "BEAR" if current<sma20<sma50 else "SIDEWAYS"
-    if vol>0.018:regime="HIGH VOL"
-    return {"name":regime,"score":{"BULL":80,"BEAR":40,"SIDEWAYS":60,"HIGH VOL":45}.get(regime,50)}
+    df=get_nifty_data("1y")
+    if df.empty:return {"name":"UNKNOWN","score":50,"confidence":35}
+    if cutoff_date is not None:df=df[df.index.date<=pd.Timestamp(cutoff_date).date()]
+    if len(df)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}
+    close=pd.to_numeric(df["Close"],errors="coerce").dropna()
+    if len(close)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}
+    current=float(close.iloc[-1]);sma20=float(close.rolling(20).mean().iloc[-1]);sma50=float(close.rolling(50).mean().iloc[-1]);sma200=float(close.rolling(200).mean().iloc[-1]) if len(close)>=200 else sma50
+    ret20=(current/float(close.iloc[-21])-1)*100 if len(close)>=21 else 0.0;ret60=(current/float(close.iloc[-61])-1)*100 if len(close)>=61 else 0.0;vol=float(close.pct_change().rolling(20).std().iloc[-1]*100)
+    score=50.0+(10 if current>sma20 else -10)+(10 if current>sma50 else -10)+(10 if current>sma200 else -10)+(8 if ret20>2 else -8 if ret20<-2 else 0)+(7 if ret60>5 else -7 if ret60<-5 else 0)
+    if vol>2.5:score-=8
+    score=max(0,min(100,score));name="BULL" if score>=65 else "BEAR" if score<=40 else "SIDEWAYS";confidence=max(35,min(95,50+abs(score-50)*1.2))
+    return {"name":name,"score":score,"confidence":confidence,"SMA20":sma20,"SMA50":sma50,"SMA200":sma200,"Return20D":ret20,"Return60D":ret60,"Volatility20D":vol}
 def get_row_for_date(df,target_date):
     if df is None or df.empty:return None
     target_date=pd.Timestamp(target_date).date()
