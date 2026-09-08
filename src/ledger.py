@@ -1,9 +1,8 @@
 from pathlib import Path
-import os
 import re
 import hashlib
 import pandas as pd
-from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,JUMP_METRICS_FILE,INTRADAY_METRICS_FILE,MODEL_VERSION,STAGE_NAME,TRANSACTION_COST_BPS,SLIPPAGE_BPS
+from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,MODEL_VERSION,STAGE_NAME,TRANSACTION_COST_BPS,SLIPPAGE_BPS
 from .utils import write_json
 
 def prediction_path(prediction_date): return PREDICTIONS_DIR / f"predictions_{prediction_date}.csv"
@@ -23,31 +22,48 @@ def _baseline_columns(df,metadata=None):
         for target in ["Open","High","Low","Close"]:x[f"Baseline_{target}"]=baseline
         x["Baseline_Close"]=baseline;x["Baseline_Cost_Pct"]=(float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS))/100.0
     return x
+
+def _valid_prediction_ledger(df):
+    if df.empty or "Symbol" not in df.columns or "Prediction_ID" not in df.columns:return False
+    if df["Symbol"].isna().any() or df["Symbol"].astype(str).str.strip().eq("").any():return False
+    if df["Symbol"].astype(str).nunique()!=len(df):return False
+    ids=df["Prediction_ID"].astype(str)
+    if ids.isna().any() or ids.str.len().lt(2).any() or ids.nunique()!=len(df):return False
+    required=["Pred_Open","Pred_High","Pred_Low","Pred_Close"]
+    if any(c not in df.columns for c in required) or df[required].isna().any().any():return False
+    for _,r in df.iterrows():
+        try:
+            o,h,l,c=[float(r[k]) for k in required]
+            if not (l<=min(o,c) and h>=max(o,c)):return False
+        except Exception:return False
+    return True
+
 def prediction_exists(prediction_date):
     path=prediction_path(prediction_date)
     if not path.exists():return False
-    try:
-        df=pd.read_csv(path);return len(df)>=1 and "Symbol" in df.columns and "Prediction_ID" in df.columns and df["Prediction_ID"].notna().all() and df["Prediction_ID"].astype(str).str.len().gt(1).all() and df["Symbol"].astype(str).nunique()==len(df)
+    try:return _valid_prediction_ledger(pd.read_csv(path))
     except Exception:return False
-def morning_report_sent(prediction_date):return False if os.getenv("GITHUB_EVENT_NAME")=="workflow_dispatch" else morning_report_path(prediction_date).exists()
+
+def morning_report_sent(prediction_date): return morning_report_path(prediction_date).exists()
 def mark_morning_report_sent(prediction_date):write_json(morning_report_path(prediction_date),{"PredictionDate":str(prediction_date),"ReportSent":True})
+
 def save_predictions(df,prediction_date,metadata=None):
     metadata=dict(metadata or {});metadata.setdefault("PredictionDate",str(prediction_date));metadata.setdefault("ModelVersion",MODEL_VERSION);metadata.setdefault("Stage",STAGE_NAME);path=prediction_path(prediction_date)
     enriched=_baseline_columns(df,metadata)
-    if enriched.empty or "Symbol" not in enriched.columns:raise ValueError("Prediction ledger cannot be empty or missing Symbol")
-    if enriched["Symbol"].duplicated().any():raise ValueError("Prediction ledger contains duplicate symbols")
-    required=["Pred_Open","Pred_High","Pred_Low","Pred_Close"]
-    missing=[c for c in required if c not in enriched.columns]
-    if missing:raise ValueError(f"Prediction ledger missing OHLC columns: {missing}")
-    if enriched[required].isna().any().any():raise ValueError("Prediction ledger contains missing OHLC predictions")
+    if not _valid_prediction_ledger(enriched):raise ValueError("Prediction ledger failed identity/OHLC integrity validation")
     if path.exists():
         try:
             existing=pd.read_csv(path)
-            if not existing.empty:return path
-        except Exception:return path
+            if not existing.empty:
+                if not _valid_prediction_ledger(existing):raise ValueError("Existing prediction ledger is corrupt and will not be overwritten")
+                old_ids=set(existing["Prediction_ID"].astype(str));new_ids=set(enriched["Prediction_ID"].astype(str))
+                if old_ids!=new_ids:raise ValueError("Prediction ledger is immutable: existing Prediction_ID set differs")
+                return path
+        except ValueError:raise
+        except Exception as exc:raise ValueError(f"Existing prediction ledger unreadable: {exc}")
     path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
-    metadata["PredictionLedgerVersion"]="v5";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist()
-    write_json(path.with_suffix(".json"),metadata);return path
+    metadata["PredictionLedgerVersion"]="v6";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();write_json(path.with_suffix(".json"),metadata);return path
+
 def load_predictions(prediction_date):
     path=prediction_path(prediction_date)
     if not path.exists():return pd.DataFrame()
@@ -56,10 +72,12 @@ def load_predictions(prediction_date):
         if "Prediction_ID" not in df.columns:df=_baseline_columns(df,{"PredictionDate":str(prediction_date)})
         return df
     except Exception:return pd.DataFrame()
+
 def load_jump_predictions(prediction_date):path=jump_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
 def load_intraday_predictions(prediction_date):path=intraday_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
 def save_jump_predictions(df,prediction_date):path=jump_path(prediction_date);df.to_csv(path,index=False);return path
 def save_intraday_predictions(df,prediction_date):path=intraday_path(prediction_date);df.to_csv(path,index=False);return path
+
 def latest_prediction_date(on_or_before=None):
     if on_or_before is not None:
         exact=pd.Timestamp(on_or_before).date();return exact if prediction_path(exact).exists() else None
@@ -68,10 +86,12 @@ def latest_prediction_date(on_or_before=None):
         match=re.search(r"predictions_(\d{4}-\d{2}-\d{2})",path.name)
         if match:dates.append(pd.Timestamp(match.group(1)).date())
     return max(dates) if dates else None
+
 def evaluation_exists(market_date):return evaluation_path(market_date).exists()
 def save_evaluation(df,market_date):
     path=evaluation_path(market_date);x=df.copy()
     if x.empty or "Symbol" not in x.columns or "PredictionDate" not in x.columns:raise ValueError("Evaluation requires Symbol and PredictionDate")
+    if x["Symbol"].astype(str).duplicated().any():raise ValueError("Evaluation contains duplicate symbols")
     if "Prediction_ID" not in x.columns:x["Prediction_ID"]=""
     for pdate,idxs in x.groupby(x["PredictionDate"].astype(str)).groups.items():
         canonical=load_predictions(pd.Timestamp(pdate).date())
@@ -81,18 +101,25 @@ def save_evaluation(df,market_date):
             pid=ids.get(str(x.at[idx,"Symbol"]))
             if not pid:raise ValueError(f"No canonical Prediction_ID for {x.at[idx,'Symbol']} on {pdate}")
             x.at[idx,"Prediction_ID"]=pid
-    if x["Prediction_ID"].isna().any() or (x["Prediction_ID"].astype(str).str.len()<2).any():raise ValueError("Evaluation contains unbound Prediction_ID")
+    if x["Prediction_ID"].isna().any() or x["Prediction_ID"].astype(str).str.len().lt(2).any():raise ValueError("Evaluation contains unbound Prediction_ID")
+    canonical_by_id={r.Prediction_ID:(str(r.Symbol),str(r.PredictionDate)) for r in x.itertuples()}
+    if any(sym!=str(row.Symbol) or pdate!=str(row.PredictionDate) for pid,(sym,pdate) in canonical_by_id.items() for row in [x[x["Prediction_ID"]==pid].iloc[0]]):raise ValueError("Evaluation Prediction_ID does not bind to Symbol/PredictionDate")
     if x.duplicated(["Prediction_ID","Symbol"],keep=False).any():raise ValueError("Evaluation contains duplicate prediction lineage")
     if path.exists():
         try:
             existing=pd.read_csv(path)
-            if not existing.empty:return path
-        except Exception:return path
+            if not existing.empty:
+                if set(existing.get("Prediction_ID",pd.Series(dtype=str)).astype(str))!=set(x["Prediction_ID"].astype(str)):raise ValueError("Evaluation is immutable: Prediction_ID set differs")
+                return path
+        except ValueError:raise
+        except Exception as exc:raise ValueError(f"Existing evaluation unreadable: {exc}")
     path.parent.mkdir(parents=True,exist_ok=True);x.to_csv(path,index=False);return path
+
 def append_daily_metrics(row):
     if DAILY_METRICS_FILE.exists():df=pd.read_csv(DAILY_METRICS_FILE);df=df[df["MarketDate"].astype(str)!=str(row["MarketDate"])]
     else:df=pd.DataFrame()
     df=pd.concat([df,pd.DataFrame([row])],ignore_index=True);df.to_csv(DAILY_METRICS_FILE,index=False)
+
 def rebuild_stock_reliability():
     frames=[]
     for path in sorted(EVALUATIONS_DIR.glob("evaluation_*.csv")):
