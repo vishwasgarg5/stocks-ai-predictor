@@ -1,9 +1,9 @@
-"""Stage 28 morning pipeline with expanded candidate prediction pool and deterministic top-10 selection."""
+"""Stage 28 morning pipeline with bounded AI candidate pool and deterministic top-10 selection."""
 import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from .config import PRESCREEN_N,PREDICTION_TOP_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,STAGE_NAME,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,VOLATILITY_LOW_PCT,VOLATILITY_HIGH_PCT,NIFTY_SYMBOL
+from .config import PRESCREEN_N,PREDICTION_TOP_N,PREDICTION_CANDIDATE_N,HISTORY_PERIOD,JUMP_CANDIDATE_N,MODEL_VERSION,STAGE_NAME,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,FINAL_LEARNING_STATE_FILE,IPO_METRICS_FILE,VOLATILITY_LOW_PCT,VOLATILITY_HIGH_PCT,NIFTY_SYMBOL
 from .market_data import load_universe,download_many,filter_liquid_universe,get_completed_session_date,get_data_cutoff_date,get_market_regime,get_market_snapshot,get_nifty_data
 from .features import technical_score
 from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
@@ -28,24 +28,17 @@ def _attach_horizons(candidates,data_map,cutoff_date):
     for _,row in candidates.iterrows():
         symbol=row["Symbol"]
         try:
-            hb=train_horizon_models(data_map[symbol],cutoff_date)
-            h=add_multihorizon_predictions(data_map[symbol],{"horizons":hb},cutoff_date)
+            hb=train_horizon_models(data_map[symbol],cutoff_date);h=add_multihorizon_predictions(data_map[symbol],{"horizons":hb},cutoff_date)
             row["MultiHorizonExpectedReturn"]=0.0 if h.empty else float(h["Expected_Return"].astype(float).clip(-50,50).median())
-            if not h.empty:
-                current=float(row.get("Current_Price",0) or 0)
-                if not current:
-                    valid=data_map[symbol][data_map[symbol].index<=pd.Timestamp(cutoff_date)]
-                    current=float(valid.iloc[-1]["Close"]) if not valid.empty else 0.0
-                for horizon in [1,3,5,7,10,20,60,90,180,365]:
-                    m=h[h["HorizonDays"]==horizon]
-                    if not m.empty:
-                        expected=float(m.iloc[0]["Expected_Return"])
-                        row[f"Horizon_{horizon}D"]=expected
-                        row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0
-                        row[f"Horizon_{horizon}D_MAPE"]=float(m.iloc[0].get("ValidationMAPE",np.nan))
+            for horizon in [1,3,5,7,10,20,60,90,180,365]:
+                m=h[h["HorizonDays"]==horizon] if not h.empty else pd.DataFrame()
+                row[f"Horizon_{horizon}D"]=float(m.iloc[0]["Expected_Return"]) if not m.empty and pd.notna(m.iloc[0]["Expected_Return"]) else np.nan
+                row[f"Horizon_{horizon}D_Pred_Close"]=float(m.iloc[0]["Pred_Close"]) if not m.empty and pd.notna(m.iloc[0]["Pred_Close"]) else np.nan
+                row[f"Horizon_{horizon}D_MAPE"]=float(m.iloc[0]["ValidationMAPE"]) if not m.empty and pd.notna(m.iloc[0].get("ValidationMAPE",np.nan)) else np.nan
+                row[f"Horizon_{horizon}D_Status"]=str(m.iloc[0].get("Status","UNAVAILABLE")) if not m.empty else "UNAVAILABLE"
         except Exception as exc:
-            print(f"{symbol}: horizon prediction failed: {exc}")
-            row["MultiHorizonExpectedReturn"]=0.0
+            print(f"{symbol}: horizon prediction failed: {exc}");row["MultiHorizonExpectedReturn"]=0.0
+            for horizon in [1,3,5,7,10,20,60,90,180,365]:row[f"Horizon_{horizon}D_Status"]="MODEL_FAILED"
         rows.append(row)
     return pd.DataFrame(rows) if rows else candidates.iloc[0:0]
 
@@ -60,12 +53,12 @@ def _attach_benchmarks_and_risk(candidates,data_map,cutoff_date,benchmark_histor
     for _,r in out.iterrows():
         df=data_map.get(r["Symbol"])
         if df is None or df.empty:vol_bucket.append("UNKNOWN");vol_pct.append(np.nan);continue
-        valid=df[df.index<=pd.Timestamp(cutoff_date)].copy();close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100;v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan;vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")))
+        valid=df[df.index<=pd.Timestamp(cutoff_date)];close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100;v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan;vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")))
     out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=benchmark_return;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-benchmark_return
     rank_col="FinalScore" if "FinalScore" in out.columns else "Score";out["CrossSectionRank"]=out.groupby("PriceBucket")[rank_col].rank(ascending=False,method="min");out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count");out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100
+    out["SectorRelative20D"]=0.0
     if "SectorReturn20D" in out.columns:
-        sector_median=out.groupby("Sector")["SectorReturn20D"].transform("median");out["SectorRelative20D"]=pd.to_numeric(out["SectorReturn20D"],errors="coerce")-pd.to_numeric(sector_median,errors="coerce")
-    else:out["SectorRelative20D"]=0.0
+        out["SectorRelative20D"]=pd.to_numeric(out["SectorReturn20D"],errors="coerce")-pd.to_numeric(out.groupby("Sector")["SectorReturn20D"].transform("median"),errors="coerce")
     return out
 
 def _attach_current_ohlcv(selected,data_map,cutoff_date):
@@ -89,8 +82,7 @@ def _portfolio_payload():
         df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[];s["SellAlerts"]=[];s["AveragePlans"]=[]
         if not df.empty:
             for _,r in df.sort_values("PnL").iterrows():
-                item={"Stock":r.Stock,"Quantity":int(r.Quantity),"Average_Price":"-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}","Current_Price":"-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}","Return_Pct":"-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%","AI_Target":"-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}","Decision":str(r.get("Decision","WAIT / DATA UNAVAILABLE")),"Sell_Window":str(r.get("Sell_Window","-")),"Profit_Target":"-" if pd.isna(r.get("Profit_Target_Price")) else f"₹{float(r.Profit_Target_Price):,.2f}","Recommended_Qty":int(r.get("Recommended_Qty",0) or 0),"New_Average_Price":"-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}","Reason":str(r.get("Sell_Reason","-"))}
-                s["Rows"].append(item)
+                item={"Stock":r.Stock,"Quantity":int(r.Quantity),"Average_Price":"-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}","Current_Price":"-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}","Return_Pct":"-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%","AI_Target":"-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}","Decision":str(r.get("Decision","WAIT / DATA UNAVAILABLE")),"Sell_Window":str(r.get("Sell_Window","-")),"Profit_Target":"-" if pd.isna(r.get("Profit_Target_Price")) else f"₹{float(r.Profit_Target_Price):,.2f}","Recommended_Qty":int(r.get("Recommended_Qty",0) or 0),"New_Average_Price":"-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}","Reason":str(r.get("Sell_Reason","-"))};s["Rows"].append(item)
                 if item["Decision"].startswith("SELL") or item["Decision"]=="SELL / PROFIT BOOK":s["SellAlerts"].append(item)
                 if item["Decision"]=="AVG":s["AveragePlans"].append(item)
         else:s["Rows"].append("Portfolio data unavailable")
@@ -119,26 +111,21 @@ def run():
     if cutoff_date is None:raise RuntimeError("Unable to determine completed market cutoff.")
     regime=get_market_regime(cutoff_date)["name"];variant=load_model_state().get("active_variant","A");snapshot=get_market_snapshot(data_map,cutoff_date);benchmark_history=get_nifty_data("3mo",NIFTY_SYMBOL)
     if not benchmark_history.empty:benchmark_history=benchmark_history[benchmark_history.index.date<=pd.Timestamp(cutoff_date).date()]
-    scored=[];bundles={}
+    scored=[]
     for symbol,df in data_map.items():
         try:scored.append((symbol,technical_score(df[df.index<=pd.Timestamp(cutoff_date)])))
         except Exception:pass
-    scored.sort(key=lambda x:x[1],reverse=True)
-    # Predict a broad candidate pool first. Final output remains TOP_N. This allows price-bucket
-    # diversification without making the initial technical top-10 selection dominate the result.
-    prediction_count=max(PRESCREEN_N,PREDICTION_TOP_N*5)
-    prediction_symbols=[x[0] for x in scored[:prediction_count]]
-    candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]]
+    scored.sort(key=lambda x:x[1],reverse=True);candidate_symbols=[x[0] for x in scored[:PRESCREEN_N]]
+    prediction_symbols=[x[0] for x in scored[:min(PREDICTION_CANDIDATE_N,len(scored))]]
     candidate_rows=[]
     for symbol in prediction_symbols:
         try:
-            bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);bundles[symbol]=bundle;result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date),"PreModelScore":dict(scored).get(symbol,0.0)})
+            bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);result=predict_stock(data_map[symbol],bundle,cutoff_date);candidate_rows.append({"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date),"PreModelScore":dict(scored).get(symbol,0.0)})
         except Exception as exc:print(f"{symbol}: prediction failed: {exc}")
     if not candidate_rows:raise RuntimeError("Unable to generate predictions.")
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
-    candidates=score_candidates(candidates,regime)
-    prediction_pool=_attach_horizons(candidates,data_map,cutoff_date)
+    candidates=score_candidates(candidates,regime);prediction_pool=_attach_horizons(candidates,data_map,cutoff_date);bundles={}
     prediction_pool=add_prediction_uncertainty(prediction_pool,data_map,bundles);prediction_pool=score_candidates(prediction_pool,regime);prediction_pool=add_market_risk(prediction_pool,regime);prediction_pool=_attach_benchmarks_and_risk(prediction_pool,data_map,cutoff_date,benchmark_history)
     selected=select_top_stocks(prediction_pool,top_n=PREDICTION_TOP_N,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
     metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"BenchmarkSymbol":NIFTY_SYMBOL,"BenchmarkExpectedReturn5D":_benchmark_return(benchmark_history),"PriceBuckets":[">2500","1000-2499","500-999","250-499","100-249","50-99","10-49"],"MaxSelectedStocks":PREDICTION_TOP_N,"GlobalTopNCap":True,"PredictionCandidatePool":len(candidate_rows),"MultiHorizonTopN":PREDICTION_TOP_N,"MultiHorizons":[1,3,5,7,10,20,60,90,180,365],"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"PreScreen":len(candidate_symbols),"AI":len(prediction_symbols),"LiquidStocks":len(data_map)}
@@ -149,6 +136,5 @@ def run():
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=get_ipo_report();ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
-    accuracy=model_report_metrics();scan={"Universe":scan_count,"Data":len(raw_data),"Liquid":len(data_map),"AI":len(prediction_symbols),"Selected":len(selected)}
-    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,accuracy=accuracy,scan=scan,portfolio=_portfolio_payload(),regime=regime,market_snapshot=snapshot,ipo=ipo);send_telegram(report);mark_morning_report_sent(prediction_date)
+    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,accuracy=model_report_metrics(),scan={"Universe":scan_count,"Data":len(raw_data),"Liquid":len(data_map),"AI":len(prediction_symbols),"Selected":len(selected)},portfolio=_portfolio_payload(),regime=regime,market_snapshot=snapshot,ipo=ipo);send_telegram(report);mark_morning_report_sent(prediction_date)
 if __name__=="__main__":run()
