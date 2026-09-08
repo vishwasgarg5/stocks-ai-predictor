@@ -9,6 +9,7 @@ Design goals:
 """
 from pathlib import Path
 import re
+from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
@@ -22,6 +23,16 @@ MAX_AVERAGING_CAPITAL_PCT = 25.0
 MIN_AI_CONFIDENCE = 60.0
 SELL_RISK_GAP_PCT = 3.0
 
+# NSE holidays used by the date-planning helpers. Keep this small and explicit;
+# market-data availability remains the source of truth for actual prices.
+NSE_HOLIDAYS = {
+    "2026-01-26", "2026-03-03", "2026-03-26", "2026-03-31",
+    "2026-04-03", "2026-04-14", "2026-05-01", "2026-05-28",
+    "2026-06-26", "2026-08-15", "2026-08-28", "2026-09-14",
+    "2026-10-02", "2026-10-20", "2026-11-09", "2026-11-24",
+    "2026-12-25",
+}
+
 NAME_TO_TICKER = {
     "RELIANCE INDUSTRIES": "RELIANCE.NS", "RELIANCE": "RELIANCE.NS",
     "VEDANTA IRON & STEEL": "VEDL.NS", "VEDANTA": "VEDL.NS",
@@ -33,7 +44,6 @@ NAME_TO_TICKER = {
     "INDIAN RENEWABLE ENERGY": "IREDA.NS", "IREDA": "IREDA.NS",
 }
 
-# Stable public schema used by morning_runner and Telegram.
 OUTPUT_COLUMNS = [
     "Stock", "Ticker", "Quantity", "Average_Price", "Current_Price",
     "Invested_Value", "Current_Value", "PnL", "Current_PnL_INR", "Return_Pct",
@@ -42,6 +52,29 @@ OUTPUT_COLUMNS = [
     "New_Average_Price", "Projected_Return_At_AI_Target", "Recovery_Gap_Pct",
     "Sell_Reason", "PredictionDate", "PriceSource",
 ]
+
+
+def _is_nse_trading_day(value):
+    """Return False for weekends and known NSE holidays."""
+    try:
+        d = pd.Timestamp(value).date()
+    except Exception:
+        return False
+    return d.weekday() < 5 and d.isoformat() not in NSE_HOLIDAYS
+
+
+def _next_trading_date(value, days=1):
+    """Advance by *days* NSE sessions, skipping weekends/holidays."""
+    try:
+        d = pd.Timestamp(value).date()
+    except Exception:
+        raise ValueError(f"Invalid date: {value!r}")
+    remaining = max(0, int(days))
+    while remaining:
+        d += timedelta(days=1)
+        if _is_nse_trading_day(d):
+            remaining -= 1
+    return d.isoformat()
 
 
 def _ticker(value):
@@ -65,11 +98,9 @@ def load_portfolio():
         src = pd.read_csv(PORTFOLIO_FILE)
     except Exception:
         return pd.DataFrame(columns=["Stock", "Ticker", "Quantity", "Average_Price", "Reported_PnL", "Reported_Return"])
-
     source_col = "Symbol" if "Symbol" in src.columns else "Stock" if "Stock" in src.columns else None
     if source_col is None or "Quantity" not in src.columns:
         return pd.DataFrame(columns=["Stock", "Ticker", "Quantity", "Average_Price", "Reported_PnL", "Reported_Return"])
-
     out = pd.DataFrame()
     out["Stock"] = src[source_col].astype(str).str.strip()
     out["Quantity"] = pd.to_numeric(src["Quantity"], errors="coerce").fillna(0)
@@ -119,15 +150,13 @@ def _num(row, name, default=np.nan):
 
 
 def _forecast_return(row):
-    # Prefer the short multi-horizon forecasts already produced by the morning model.
     vals = []
-    for h in (1, 3, 5, 7, 20):
+    for h in (1, 3, 5, 7, 10, 20):
         v = _num(row, f"Horizon_{h}D")
         if np.isfinite(v):
             vals.append((h, v))
     if vals:
         return vals
-    # Older artifacts may expose Expected_Return instead.
     v = _num(row, "Expected_Return")
     return [(1, v)] if np.isfinite(v) else []
 
@@ -137,18 +166,14 @@ def _decision(current, avg, target, confidence, forecasts):
         return "WAIT", "NO PRICE / COST DATA"
     if not np.isfinite(target):
         return "HOLD", "AI TARGET UNAVAILABLE"
-
     target_gap = (target / avg - 1.0) * 100.0
     recovery_gap = (avg - current) / avg * 100.0
-
-    # Profit-book only when the model target itself is already at/above the cost target.
     if current >= avg * (1 + TARGET_PROFIT_PCT / 100):
         return "SELL", "10% profit target already reached"
     if current >= target and target > avg:
         return "SELL", "AI target reached"
     if target < current * (1 - SELL_RISK_GAP_PCT / 100):
         return "SELL", "AI target is materially below current price"
-
     positive = [v for _, v in forecasts if np.isfinite(v) and v >= TARGET_PROFIT_PCT]
     if recovery_gap >= 5 and positive and confidence >= MIN_AI_CONFIDENCE:
         return "AVG", "Multi-horizon recovery supports limited averaging"
@@ -164,28 +189,23 @@ def _plan_row(row, pred_row, prediction_date):
     avg = row.get("Average_Price", np.nan)
     reported_pnl = row.get("Reported_PnL", np.nan)
     reported_return = row.get("Reported_Return", np.nan)
-
     if pd.isna(avg) and current is not None and pd.notna(reported_return) and float(reported_return) > -100:
         avg = current / (1 + float(reported_return) / 100)
     if pd.isna(avg) and current is not None and qty > 0 and pd.notna(reported_pnl):
         avg = current - float(reported_pnl) / qty
-
     target = _num(pred_row, "Pred_Close") if pred_row is not None else np.nan
     confidence = _num(pred_row, "CalibratedConfidence", _num(pred_row, "Confidence", 0)) if pred_row is not None else 0.0
     direction = str(pred_row.get("Direction", "-")) if pred_row is not None else "-"
     forecasts = _forecast_return(pred_row) if pred_row is not None else []
-
     invested = qty * float(avg) if pd.notna(avg) else 0.0
     current_value = qty * current if current is not None else 0.0
     pnl = current_value - invested
     ret = pnl / invested * 100 if invested > 0 else np.nan
     profit_target = float(avg) * (1 + TARGET_PROFIT_PCT / 100) if pd.notna(avg) else np.nan
     recovery_gap = ((float(avg) - current) / float(avg) * 100) if current is not None and pd.notna(avg) and float(avg) else np.nan
-
     decision, reason = _decision(current, float(avg) if pd.notna(avg) else np.nan, target, confidence, forecasts)
     recommended_qty = 0
     new_avg = float(avg) if pd.notna(avg) else np.nan
-
     if decision == "AVG" and current is not None and pd.notna(avg) and np.isfinite(target):
         positive = max((v for _, v in forecasts if np.isfinite(v) and v >= TARGET_PROFIT_PCT), default=TARGET_PROFIT_PCT)
         desired_avg = target / (1 + positive / 100)
@@ -199,11 +219,9 @@ def _plan_row(row, pred_row, prediction_date):
             else:
                 decision = "HOLD"
                 reason = "Averaging cap does not justify additional quantity"
-
     target_price = float(target) if np.isfinite(target) else np.nan
     projected = ((target / new_avg) - 1) * 100 if np.isfinite(target) and np.isfinite(new_avg) and new_avg else np.nan
     sell_window = "NOW" if decision == "SELL" else ("MONITOR" if np.isfinite(target_price) else "NO AI DATA")
-
     return {
         "Stock": _symbol(ticker), "Ticker": ticker, "Quantity": int(qty),
         "Average_Price": avg, "Current_Price": current, "Invested_Value": invested,
@@ -223,28 +241,21 @@ def portfolio_snapshot():
     empty_summary = {"Positions": 0, "Value": 0.0, "PnL": 0.0, "Return": 0.0, "ActionCounts": {}}
     if portfolio.empty:
         return pd.DataFrame(columns=OUTPUT_COLUMNS), empty_summary
-
     predictions, prediction_date = _latest_predictions()
     pred_by_ticker = {}
     if not predictions.empty:
         for _, r in predictions.drop_duplicates("Ticker", keep="last").iterrows():
             pred_by_ticker[str(r["Ticker"])] = r
-
-    rows = []
-    for _, row in portfolio.iterrows():
-        rows.append(_plan_row(row, pred_by_ticker.get(str(row["Ticker"])), prediction_date))
-
+    rows = [_plan_row(row, pred_by_ticker.get(str(row["Ticker"])), prediction_date) for _, row in portfolio.iterrows()]
     df = pd.DataFrame(rows)
     for c in OUTPUT_COLUMNS:
         if c not in df.columns:
             df[c] = np.nan
     df = df[OUTPUT_COLUMNS]
-    # Canonical aliases prevent downstream KeyError regardless of report version.
     df["PnL"] = pd.to_numeric(df["PnL"], errors="coerce").fillna(0.0)
     df["Current_PnL_INR"] = df["PnL"]
     df["Return_Pct"] = pd.to_numeric(df["Return_Pct"], errors="coerce")
     df["Decision"] = df["Decision"].fillna("WAIT").astype(str)
-
     total_value = float(pd.to_numeric(df["Current_Value"], errors="coerce").fillna(0).sum())
     total_invested = float(pd.to_numeric(df["Invested_Value"], errors="coerce").fillna(0).sum())
     total_pnl = total_value - total_invested
