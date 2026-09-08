@@ -112,7 +112,8 @@ def _decision(current,avg,target,confidence,forecasts):
     if current is None or not np.isfinite(current) or not np.isfinite(avg) or avg<=0:return "WAIT","NO PRICE / COST DATA"
     if not np.isfinite(target):return "HOLD","AI PREDICTION UNAVAILABLE"
     profit_target=avg*(1+TARGET_PROFIT_PCT/100)
-    if current>=profit_target:return "SELL","10% profit target reached"
+    tolerance=max(1e-8,abs(avg)*1e-8)
+    if current+tolerance>=profit_target:return "SELL","10% profit target reached"
     if target>=profit_target and current<avg:
         strong=sum(v>=TARGET_PROFIT_PCT for _,v in forecasts)
         if strong>=2 and confidence>=MIN_AI_CONFIDENCE:return "HOLD","MULTI_HORIZON_CONFIRMED recovery"
@@ -121,7 +122,6 @@ def _decision(current,avg,target,confidence,forecasts):
     return "HOLD","AI recovery not yet confirmed"
 
 def _portfolio_ai(portfolio,cutoff_date=None,variant="A"):
-    """Return portfolio AI rows, preferring exact canonical morning predictions."""
     if portfolio.empty:return pd.DataFrame()
     canonical,_=_latest_predictions()
     canonical_by={_symbol(r.Symbol):r for _,r in canonical.iterrows()} if not canonical.empty else {}
@@ -140,8 +140,7 @@ def _portfolio_ai(portfolio,cutoff_date=None,variant="A"):
     cutoff=_effective_cutoff(cutoff_date)
     for _,r in pd.DataFrame(missing).iterrows():
         ticker=str(r["Ticker"]);symbol=_symbol(ticker);d=_cached_history(ticker,cutoff)
-        if d.empty or "Close" not in d or len(d)<150:
-            print(f"{symbol}: portfolio fallback skipped: canonical prediction missing and <150 canonical rows");continue
+        if d.empty or "Close" not in d or len(d)<150:continue
         try:
             effective=pd.Timestamp(cutoff);d=d[d.index<=effective].dropna(subset=["Open","High","Low","Close","Volume"])
             if len(d)<150:continue
@@ -149,9 +148,9 @@ def _portfolio_ai(portfolio,cutoff_date=None,variant="A"):
             try:
                 hb=train_horizon_models(d,effective);h=add_multihorizon_predictions(d,{"horizons":hb},effective)
                 for _,hr in h.iterrows():item[f"Horizon_{int(hr.HorizonDays)}D"]=float(hr.Expected_Return)
-            except Exception as exc:print(f"{symbol}: portfolio horizons skipped: {exc}")
+            except Exception:pass
             rows.append(item)
-        except Exception as exc:print(f"{symbol}: portfolio fallback skipped: {exc}")
+        except Exception:pass
     return pd.DataFrame(rows)
 
 def _plan_row(row,pred,prediction_date):
