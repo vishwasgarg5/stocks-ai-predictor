@@ -2311,6 +2311,97 @@
           "DownsideHitProb_2Pct": 0.0013175273886185984
         }
       ]
+    },
+    {
+      "date": "2026-09-08",
+      "regime": "BEAR",
+      "selected": [
+        {
+          "Symbol": "BEML",
+          "PriceBucket": "B2",
+          "VolatilityBucket": "MEDIUM",
+          "VolatilityPct": 1.7169479881615308,
+          "CrossSectionPercentile": 100.0,
+          "SectorRelative20D": 5.034960364538999,
+          "BenchmarkEdgePct": 1.067600724471085,
+          "RiskAdjustedReturn": -0.10682716160284021,
+          "FinalDecisionScore": 64.11205428005624,
+          "Action": "NO TRADE",
+          "FinalRisk": "MEDIUM",
+          "CalibratedConfidence": 93.37935469442877,
+          "PredictionUncertaintyPct": 5.0,
+          "TargetHitProb_3_0Pct": 78.90113211298745,
+          "DownsideHitProb_2Pct": 0.000944521737342819
+        },
+        {
+          "Symbol": "ANANTRAJ",
+          "PriceBucket": "B3",
+          "VolatilityBucket": "MEDIUM",
+          "VolatilityPct": 1.8923121447280677,
+          "CrossSectionPercentile": 50.0,
+          "SectorRelative20D": -2.5242832254557923,
+          "BenchmarkEdgePct": 1.3123481314804453,
+          "RiskAdjustedReturn": 0.03241047043175347,
+          "FinalDecisionScore": 63.467046193241316,
+          "Action": "NO TRADE",
+          "FinalRisk": "MEDIUM",
+          "CalibratedConfidence": 86.80792596867954,
+          "PredictionUncertaintyPct": 5.0,
+          "TargetHitProb_3_0Pct": 77.38858119598662,
+          "DownsideHitProb_2Pct": 0.001201706885125406
+        },
+        {
+          "Symbol": "BESTAGRO",
+          "PriceBucket": "B7",
+          "VolatilityBucket": "HIGH",
+          "VolatilityPct": 3.5885534893998567,
+          "CrossSectionPercentile": 100.0,
+          "SectorRelative20D": -8.336445519768233,
+          "BenchmarkEdgePct": -0.30028622008339,
+          "RiskAdjustedReturn": -0.4322921838372585,
+          "FinalDecisionScore": 63.09035500725943,
+          "Action": "NO TRADE",
+          "FinalRisk": "MEDIUM",
+          "CalibratedConfidence": 94.27058726960122,
+          "PredictionUncertaintyPct": 5.0,
+          "TargetHitProb_3_0Pct": 79.10045510932142,
+          "DownsideHitProb_2Pct": 0.0009141714600075089
+        },
+        {
+          "Symbol": "20MICRONS",
+          "PriceBucket": "B5",
+          "VolatilityBucket": "MEDIUM",
+          "VolatilityPct": 2.6458735816503127,
+          "CrossSectionPercentile": 100.0,
+          "SectorRelative20D": 8.336445519768231,
+          "BenchmarkEdgePct": 0.35904765930560023,
+          "RiskAdjustedReturn": -0.33711729522774064,
+          "FinalDecisionScore": 62.51393035838012,
+          "Action": "NO TRADE",
+          "FinalRisk": "MEDIUM",
+          "CalibratedConfidence": 91.79832001711694,
+          "PredictionUncertaintyPct": 5.0,
+          "TargetHitProb_3_0Pct": 78.54411792633695,
+          "DownsideHitProb_2Pct": 0.0010008631567765118
+        },
+        {
+          "Symbol": "ANTELOPUS",
+          "PriceBucket": "B3",
+          "VolatilityBucket": "HIGH",
+          "VolatilityPct": 5.498696043929483,
+          "CrossSectionPercentile": 100.0,
+          "SectorRelative20D": 0.0,
+          "BenchmarkEdgePct": -0.33833409700853023,
+          "RiskAdjustedReturn": -0.2890415271142783,
+          "FinalDecisionScore": 60.992850839310734,
+          "Action": "NO TRADE",
+          "FinalRisk": "MEDIUM",
+          "CalibratedConfidence": 83.73426255886001,
+          "PredictionUncertaintyPct": 5.0,
+          "TargetHitProb_3_0Pct": 76.65526745415286,
+          "DownsideHitProb_2Pct": 0.0013449832644002377
+        }
+      ]
     }
   ],
   "last_update": "2026-09-08"
