@@ -31,7 +31,7 @@ jobs:
       - name: Run complete test suite
         run: python -m pytest -q tests/
       - name: Run Stage 28 contract and canonical integrity tests
-        run: python -m pytest -q tests/test_stage28_contract.py tests/test_data_snapshot.py tests/test_report_integrity.py tests/test_prediction_lineage.py
+        run: python -m pytest -q tests/test_stage28_contract.py tests/test_data_snapshot.py tests/test_report_integrity.py tests/test_prediction_lineage.py tests/test_portfolio_stage28_hardening.py
       - name: Live market-data quality gate
         run: python -m src.live_quality_gate evening
       - name: Run Stage 28 evaluation and learning
