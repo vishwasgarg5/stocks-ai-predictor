@@ -1,8 +1,8 @@
 """Stage 28 portfolio decision engine.
 
-Portfolio calculations are fail-closed and consume the canonical GitHub OHLCV
-snapshot/cache. Direct per-position Yahoo downloads are intentionally removed.
-Prediction rows are selected by prediction lineage/date, never file mtime.
+Portfolio calculations are fail-closed and consume canonical GitHub OHLCV.
+Portfolio AI reuses the canonical morning prediction/lineage first and only
+trains a holding-specific fallback when no canonical prediction exists.
 """
 from __future__ import annotations
 from datetime import timedelta
@@ -39,7 +39,7 @@ def _next_trading_date(value,days=1):
     return d.isoformat()
 def _num(row,name,default=np.nan):
     try:
-        v=float(row.get(name,default)); return v if np.isfinite(v) else default
+        v=float(row.get(name,default));return v if np.isfinite(v) else default
     except Exception:return default
 
 def load_portfolio():
@@ -49,22 +49,15 @@ def load_portfolio():
     except Exception:return pd.DataFrame(columns=cols)
     source="Symbol" if "Symbol" in src.columns else "Stock" if "Stock" in src.columns else None
     if source is None or "Quantity" not in src.columns:return pd.DataFrame(columns=cols)
-    out=pd.DataFrame(); out["Stock"]=src[source].astype(str).str.strip(); out["Quantity"]=pd.to_numeric(src["Quantity"],errors="coerce").fillna(0)
-    out["Average_Price"]=pd.to_numeric(src.get("Average_Price",np.nan),errors="coerce")
-    out["Reported_PnL"]=pd.to_numeric(src.get("Current_PnL_INR",np.nan),errors="coerce")
-    out["Reported_Return"]=pd.to_numeric(src.get("Return_Percent",np.nan),errors="coerce")
-    out["Ticker"]=out["Stock"].map(_ticker); out["Stock"]=out["Ticker"].map(_symbol)
-    return out
+    out=pd.DataFrame();out["Stock"]=src[source].astype(str).str.strip();out["Quantity"]=pd.to_numeric(src["Quantity"],errors="coerce").fillna(0);out["Average_Price"]=pd.to_numeric(src.get("Average_Price",np.nan),errors="coerce");out["Reported_PnL"]=pd.to_numeric(src.get("Current_PnL_INR",np.nan),errors="coerce");out["Reported_Return"]=pd.to_numeric(src.get("Return_Percent",np.nan),errors="coerce");out["Ticker"]=out["Stock"].map(_ticker);out["Stock"]=out["Ticker"].map(_symbol);return out
 
 def _effective_cutoff(requested=None):
     if requested is not None:return pd.Timestamp(requested).date()
     d=pd.Timestamp(today_ist()).date()
-    if _is_nse_trading_day(d):return d
     while not _is_nse_trading_day(d):d-=timedelta(days=1)
     return d
 
 def _cached_history(ticker,cutoff_date=None):
-    """Canonical cache-only history; no direct Yahoo fallback."""
     cutoff=_effective_cutoff(cutoff_date)
     d,snap=get_snapshot(_symbol(ticker),cutoff_date=cutoff,min_rows=60,allow_download=False)
     if snap.status not in {"OK","STALE"} or d.empty:return pd.DataFrame()
@@ -86,13 +79,12 @@ def _latest_predictions():
         except Exception:continue
     if not frames:return pd.DataFrame(),None
     allp=pd.concat(frames,ignore_index=True)
-    date_col=next((c for c in ("PredictionDate","Run_Date","Cutoff_Date") if c in allp.columns),None)
-    if date_col:
-        allp["_lineage_date"]=pd.to_datetime(allp[date_col],errors="coerce")
-        allp=allp.sort_values("_lineage_date",kind="stable")
+    date_cols=[c for c in ("PredictionDate","Run_Date","Cutoff_Date") if c in allp.columns]
+    if date_cols:
+        dc=date_cols[0];allp["_lineage_date"]=pd.to_datetime(allp[dc],errors="coerce")
         valid=allp["_lineage_date"].dropna()
         if not valid.empty:allp=allp[allp["_lineage_date"]==valid.max()]
-    else:allp=allp.sort_values("_source_file",kind="stable")
+    allp=allp.sort_values([c for c in ("Prediction_ID","Symbol") if c in allp.columns],kind="stable") if len(allp) else allp
     allp=allp.drop_duplicates("Symbol",keep="last")
     latest=None
     if "_lineage_date" in allp.columns and allp["_lineage_date"].notna().any():latest=str(allp["_lineage_date"].max().date())
@@ -104,12 +96,6 @@ def _attach_predictions(base):
     pred["Ticker"]=pred["Symbol"].astype(str).map(_ticker)
     keep=[c for c in ["Ticker","Prediction_ID","Pred_Close","Pred_Open","Pred_High","Pred_Low","Confidence","CalibratedConfidence","Direction","Action"]+[f"Horizon_{h}D" for h in HORIZONS] if c in pred.columns]
     return out.merge(pred[keep].drop_duplicates("Ticker",keep="last"),on="Ticker",how="left"),date
-
-def _average_plan(row):
-    avg=float(row.get("Average_Price",np.nan));target=float(row.get("AI_Target",row.get("Pred_Close",np.nan)))
-    row["Profit_Target_Price"]=round(avg*(1+TARGET_PROFIT_PCT/100),10) if np.isfinite(avg) else np.nan
-    row["Projected_Return_At_AI_Target"]=round((target/avg-1)*100,10) if np.isfinite(avg) and avg else np.nan
-    return row
 
 def _forecast_return(row):return [(h,_num(row,f"Horizon_{h}D")) for h in HORIZONS if np.isfinite(_num(row,f"Horizon_{h}D"))]
 
@@ -135,33 +121,45 @@ def _decision(current,avg,target,confidence,forecasts):
     return "HOLD","AI recovery not yet confirmed"
 
 def _portfolio_ai(portfolio,cutoff_date=None,variant="A"):
+    """Return portfolio AI rows, preferring exact canonical morning predictions."""
     if portfolio.empty:return pd.DataFrame()
+    canonical,_=_latest_predictions()
+    canonical_by={_symbol(r.Symbol):r for _,r in canonical.iterrows()} if not canonical.empty else {}
+    missing=[];rows=[]
+    for _,r in portfolio.iterrows():
+        symbol=_symbol(r["Ticker"]);cp=canonical_by.get(symbol)
+        if cp is not None:
+            item=cp.to_dict();item["Symbol"]=symbol
+            if "PredictionDate" not in item or pd.isna(item.get("PredictionDate")):
+                item["PredictionDate"]=str(canonical.get("_lineage_date",pd.Series(dtype="datetime64[ns]")).iloc[0].date()) if "_lineage_date" in canonical.columns and not canonical.empty else str(_effective_cutoff(cutoff_date))
+            item["PredictionSource"]="CANONICAL_MORNING";rows.append(item)
+        else:missing.append(r)
+    if not missing:return pd.DataFrame(rows)
     from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
     from .multihorizon import train_horizon_models
-    rows=[];cutoff=_effective_cutoff(cutoff_date)
-    for _,r in portfolio.iterrows():
+    cutoff=_effective_cutoff(cutoff_date)
+    for _,r in pd.DataFrame(missing).iterrows():
         ticker=str(r["Ticker"]);symbol=_symbol(ticker);d=_cached_history(ticker,cutoff)
         if d.empty or "Close" not in d or len(d)<150:
-            print(f"{symbol}: portfolio AI skipped: canonical history unavailable or <150 rows");continue
+            print(f"{symbol}: portfolio fallback skipped: canonical prediction missing and <150 canonical rows");continue
         try:
             effective=pd.Timestamp(cutoff);d=d[d.index<=effective].dropna(subset=["Open","High","Low","Close","Volume"])
             if len(d)<150:continue
-            bundle=train_stock_bundle(d,symbol,effective,variant,train_horizons=False);pred=predict_stock(d,bundle,effective);item={"Symbol":symbol,**pred,"PredictionDate":str(effective.date())}
+            bundle=train_stock_bundle(d,symbol,effective,variant,train_horizons=False);pred=predict_stock(d,bundle,effective);item={"Symbol":symbol,**pred,"PredictionDate":str(effective.date()),"PredictionSource":"PORTFOLIO_FALLBACK"}
             try:
                 hb=train_horizon_models(d,effective);h=add_multihorizon_predictions(d,{"horizons":hb},effective)
                 for _,hr in h.iterrows():item[f"Horizon_{int(hr.HorizonDays)}D"]=float(hr.Expected_Return)
             except Exception as exc:print(f"{symbol}: portfolio horizons skipped: {exc}")
             rows.append(item)
-        except Exception as exc:print(f"{symbol}: portfolio AI skipped: {exc}")
+        except Exception as exc:print(f"{symbol}: portfolio fallback skipped: {exc}")
     return pd.DataFrame(rows)
 
 def _plan_row(row,pred,prediction_date):
-    ticker=row["Ticker"];current,source=_latest_price(ticker,prediction_date);qty=float(row.get("Quantity",0) or 0);avg=row.get("Average_Price",np.nan)
-    reported_pnl=row.get("Reported_PnL",np.nan);reported_return=row.get("Reported_Return",np.nan)
-    if pred is not None and np.isfinite(_num(pred,"Current_Price")):current=_num(pred,"Current_Price");source="AI_OHLCV"
+    ticker=row["Ticker"];current,source=_latest_price(ticker,prediction_date);qty=float(row.get("Quantity",0) or 0);avg=row.get("Average_Price",np.nan);reported_pnl=row.get("Reported_PnL",np.nan);reported_return=row.get("Reported_Return",np.nan)
+    if pred is not None and np.isfinite(_num(pred,"Current_Price")):current=_num(pred,"Current_Price");source="CANONICAL_PREDICTION"
     if pd.isna(avg) and current is not None and pd.notna(reported_return):avg=current/(1+float(reported_return)/100)
     if pd.isna(avg) and current is not None and pd.notna(reported_pnl) and qty>0:avg=current-float(reported_pnl)/qty
-    target=_num(pred,"Pred_Close") if pred is not None else np.nan;confidence=_num(pred,"Confidence",0) if pred is not None else 0;direction=str(pred.get("Direction","-") if pred is not None else "-");forecasts=_forecast_return(pred) if pred is not None else []
+    target=_num(pred,"Pred_Close") if pred is not None else np.nan;confidence=_num(pred,"CalibratedConfidence",_num(pred,"Confidence",0)) if pred is not None else 0;direction=str(pred.get("Direction","-") if pred is not None else "-");forecasts=_forecast_return(pred) if pred is not None else []
     invested=qty*float(avg) if pd.notna(avg) else 0.;value=qty*current if current is not None else 0.;pnl=value-invested;ret=pnl/invested*100 if invested else np.nan;profit_target=float(avg)*(1+TARGET_PROFIT_PCT/100) if pd.notna(avg) else np.nan;recovery=((float(avg)-current)/float(avg)*100) if current is not None and pd.notna(avg) and float(avg) else np.nan
     decision,reason=_decision(current,float(avg) if pd.notna(avg) else np.nan,target,confidence,forecasts);projected=(target/float(avg)-1)*100 if np.isfinite(target) and pd.notna(avg) and float(avg) else np.nan
     return {"Stock":_symbol(ticker),"Ticker":ticker,"Quantity":int(qty),"Average_Price":avg,"Current_Price":current,"Invested_Value":invested,"Current_Value":value,"PnL":pnl,"Current_PnL_INR":pnl,"Return_Pct":ret,"AI_Target":target,"AI_Confidence":confidence,"AI_Direction":direction,"Decision":decision,"Sell_Window":"NOW" if decision in {"SELL","REDUCE"} else ("WATCH" if np.isfinite(target) else "NO AI DATA"),"Profit_Target_Price":profit_target,"Sell_Target_Price":target,"Recommended_Qty":0,"New_Average_Price":avg,"Projected_Return_At_AI_Target":projected,"Recovery_Gap_Pct":recovery,"Sell_Reason":reason,"PredictionDate":prediction_date or "-","PriceSource":source}
@@ -175,4 +173,4 @@ def portfolio_snapshot(cutoff_date=None,variant="A"):
     for c in OUTPUT_COLUMNS:
         if c not in df.columns:df[c]=np.nan
     df=df[OUTPUT_COLUMNS];df["PnL"]=pd.to_numeric(df["PnL"],errors="coerce").fillna(0);df["Current_PnL_INR"]=df["PnL"];invested=pd.to_numeric(df["Invested_Value"],errors="coerce").fillna(0).sum();value=pd.to_numeric(df["Current_Value"],errors="coerce").fillna(0).sum();pnl=value-invested
-    return df,{"Positions":len(df),"Value":float(value),"PnL":float(pnl),"Return":float(pnl/invested*100) if invested else 0.,"ActionCounts":df["Decision"].value_counts().to_dict(),"Available":True,"PredictionDate":prediction_date,"DataSource":"CANONICAL_GITHUB_OHLCV"}
+    return df,{"Positions":len(df),"Value":float(value),"PnL":float(pnl),"Return":float(pnl/invested*100) if invested else 0.,"ActionCounts":df["Decision"].value_counts().to_dict(),"Available":True,"PredictionDate":prediction_date,"DataSource":"CANONICAL_GITHUB_OHLCV","PredictionBinding":"CANONICAL_MORNING_FIRST"}
