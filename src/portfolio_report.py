@@ -4,7 +4,6 @@ from datetime import timedelta
 import re
 import numpy as np
 import pandas as pd
-from .config import MODEL_VERSION
 ROOT=Path(__file__).resolve().parents[1];PORTFOLIO_FILE=ROOT/"portfolio_manager"/"data"/"my_portfolio.csv";OHLCV_DIR=ROOT/"data"/"ohlcv";PREDICTIONS_DIR=ROOT/"data"/"stage2"/"predictions"
 TARGET_PROFIT_PCT=10.0;MAX_AVERAGING_CAPITAL_PCT=25.0;MIN_AI_CONFIDENCE=60.0;SELL_RISK_GAP_PCT=3.0
 NSE_HOLIDAYS={"2026-01-26","2026-03-03","2026-03-26","2026-03-31","2026-04-03","2026-04-14","2026-05-01","2026-05-28","2026-06-26","2026-08-15","2026-08-28","2026-09-14","2026-10-02","2026-10-20","2026-11-09","2026-11-24","2026-12-25"}
@@ -60,6 +59,21 @@ def _latest_predictions():
             if not d.empty and "Symbol" in d.columns:return d,p.stem.replace("predictions_","")
         except Exception:pass
     return pd.DataFrame(),None
+def _attach_predictions(base):
+    pred,date=_latest_predictions();out=base.copy()
+    if pred.empty:return out,date
+    if "Ticker" not in pred.columns and "Symbol" in pred.columns:pred["Ticker"]=pred["Symbol"].astype(str).map(_ticker)
+    if "Ticker" not in pred.columns:return out,date
+    pred=pred.drop_duplicates("Ticker",keep="last");keep=[c for c in ["Ticker","Pred_Close","Pred_Open","Pred_High","Pred_Low","AI_High","AI_Low","Confidence","CalibratedConfidence","Direction","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_7D","Horizon_10D","Horizon_20D","Horizon_60D","Horizon_90D","Horizon_180D","Horizon_365D"] if c in pred.columns]
+    out=out.merge(pred[keep],on="Ticker",how="left")
+    if "AI_Target" not in out.columns and "Pred_Close" in out.columns:out["AI_Target"]=out["Pred_Close"]
+    if "AI_High" not in out.columns and "Pred_High" in out.columns:out["AI_High"]=out["Pred_High"]
+    return out,date
+def _average_plan(row):
+    avg=float(row.get("Average_Price",np.nan));target=float(row.get("AI_Target",row.get("Pred_Close",np.nan)))
+    row["Profit_Target_Price"]=round(avg*(1+TARGET_PROFIT_PCT/100),10) if np.isfinite(avg) else np.nan
+    row["Projected_Return_At_AI_Target"]=round((target/avg-1)*100,10) if np.isfinite(avg) and avg else np.nan
+    return row
 def _num(row,name,default=np.nan):
     try:v=float(row.get(name,default));return v if np.isfinite(v) else default
     except Exception:return default
