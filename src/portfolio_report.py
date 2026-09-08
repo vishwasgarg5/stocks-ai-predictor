@@ -70,9 +70,14 @@ def _latest_predictions():
 def _attach_predictions(base):
     pred,date=_latest_predictions();out=base.copy()
     if pred.empty:return out,date
+    pred=pred.copy()
+    if "Ticker" not in pred.columns and "Symbol" in pred.columns:pred["Ticker"]=pred["Symbol"].astype(str).map(_ticker)
+    if "Ticker" not in pred.columns:return out,date
     pred=pred.drop_duplicates("Ticker",keep="last")
-    keep=[c for c in ["Ticker","Pred_Close","Pred_Open","Pred_High","Pred_Low","AI_High","AI_Low","Confidence","CalibratedConfidence","Direction","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_7D","Horizon_10D","Horizon_20D"] if c in pred.columns]
+    keep=[c for c in ["Ticker","Pred_Close","Pred_Open","Pred_High","Pred_Low","AI_High","AI_Low","Confidence","CalibratedConfidence","Direction","Action","Horizon_1D","Horizon_3D","Horizon_5D","Horizon_10D","Horizon_20D"] if c in pred.columns]
+    if "Ticker" not in out.columns and "Stock" in out.columns:out["Ticker"]=out["Stock"].astype(str).map(_ticker)
     out=out.merge(pred[keep],on="Ticker",how="left")
+    if "AI_Target" not in out.columns and "Pred_Close" in out.columns:out["AI_Target"]=out["Pred_Close"]
     if "AI_High" not in out.columns and "Pred_High" in out.columns:out["AI_High"]=out["Pred_High"]
     return out,date
 
