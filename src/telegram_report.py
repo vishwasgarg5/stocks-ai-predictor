@@ -6,13 +6,11 @@ import re
 import requests
 import pandas as pd
 from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION
-
 _SECTION="\n§§TELEGRAM_SECTION§§\n"
 _BUCKET_ORDER=["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
 _BUCKET_LABELS={"B1":">2500","B2":"1000-2499","B3":"500-999","B4":"250-499","B5":"100-249","B6":"50-99","B7":"10-49"}
 _CODE_RE=re.compile(r"^```$")
 REPORT_HORIZONS=(3,7,10)
-
 def _markdown_to_telegram_html(text):
     chunks=text.split("```");out=[]
     for i,chunk in enumerate(chunks):
@@ -20,7 +18,6 @@ def _markdown_to_telegram_html(text):
         else:
             safe=html.escape(chunk);safe=re.sub(r"\*([^*\n]+)\*",r"<b>\1</b>",safe);out.append(safe)
     return "".join(out)
-
 def _plain_text_fallback(text):return text.replace("```","").replace("*","").replace("_","")
 def _post_telegram(message,token,chat_id):
     url=f"https://api.telegram.org/bot{token}/sendMessage"
@@ -33,7 +30,6 @@ def _post_telegram(message,token,chat_id):
         if r.status_code==200:return True
     except Exception as exc:print("Telegram plain-text exception:",exc)
     return False
-
 def _split_safe(text,max_length):
     if len(text)<=max_length:return [text]
     result=[];current="";in_code=False
@@ -48,7 +44,6 @@ def _split_safe(text,max_length):
         if in_code:current+="```\n"
         result.append(current.rstrip("\n"))
     return [x for x in result if x]
-
 def _report_messages(text):
     parts=[p.strip() for p in text.split(_SECTION) if p.strip()]
     if not parts:return []
@@ -60,18 +55,15 @@ def _report_messages(text):
     out=[]
     for group in groups:out.extend(_split_safe(group,TELEGRAM_MAX_LENGTH))
     return out
-
 def send_telegram(text):
     token,chat_id=os.getenv("TELEGRAM_BOT_TOKEN"),os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:return False
     messages=_report_messages(text);print(f"Telegram report: sending {len(messages)} message(s).")
     return bool(messages) and all(_post_telegram(m,token,chat_id) for m in messages)
-
 def _num(v,default=None):
     try:
         x=float(v);return x if math.isfinite(x) else default
     except (TypeError,ValueError):return default
-
 def _fmt(v,digits=2):
     x=_num(v);return "-" if x is None else f"{x:,.{digits}f}"
 def _pct(v):
@@ -86,49 +78,38 @@ def _decision(v):
     if s.startswith("AVG") or s in {"AVERAGE","AVERAGING"}:return "AVG"
     if s.startswith("BUY") or s=="ADD":return "BUY"
     return s or "-"
-
 def _table(headers,rows,max_width=12):
     if not rows:return []
-    rows=[[str(x).replace("|","/").replace("\n"," ") for x in row] for row in rows]
-    widths=[len(str(h)) for h in headers]
+    rows=[[str(x).replace("|","/").replace("\n"," ") for x in row] for row in rows];widths=[len(str(h)) for h in headers]
     for row in rows:
         for i,v in enumerate(row):
             if i<len(widths):widths[i]=min(max(widths[i],len(v)),max_width)
     def fit(v,w):return v if len(v)<=w else v[:max(1,w-1)]+"…"
-    line=lambda row:" | ".join(fit(v,widths[i]).ljust(widths[i]) for i,v in enumerate(row))
-    sep="-"*(sum(widths)+3*(len(widths)-1)+2)
+    line=lambda row:" | ".join(fit(v,widths[i]).ljust(widths[i]) for i,v in enumerate(row));sep="-"*(sum(widths)+3*(len(widths)-1)+2)
     return ["```",line(headers),sep,*[line(r) for r in rows],"```"]
-
 def _bucket_label(bucket,group=None):
     if group is not None and "PriceBucketLabel" in group.columns:
         v=group["PriceBucketLabel"].dropna().astype(str)
         if not v.empty:return v.iloc[0]
     return _BUCKET_LABELS.get(str(bucket),str(bucket))
-
 def _ordered_price_buckets(values):
     present=[str(x) for x in pd.Series(values).dropna().unique()] if values is not None else []
     if any(x.startswith("B") for x in present):
         order=["B7","B6","B5","B4","B3","B2","B1"];return [x for x in order if x in present]+[x for x in present if x not in order]
     return [x for x in _BUCKET_ORDER if x in present]+[x for x in present if x not in _BUCKET_ORDER]
-
 def _market(snapshot,regime):
     snapshot=snapshot or {};rows=[]
     for name,key in [("NIFTY","NIFTY"),("BANK","BANKNIFTY"),("FINN","FINNIFTY"),("MIDCP","MIDCPNIFTY")]:
         x=snapshot.get(key,{}) or {};rows.append([name,_fmt(x.get("Close")),_pct(x.get("Change1D"))])
-    x=snapshot.get("VIX",{}) or {};rows.append(["VIX",_fmt(x.get("Close")),"-"])
-    b=snapshot.get("Breadth",{}) or {};return _table(["Index","Value","1D%"],rows)+[f"Breadth: {int(_num(b.get('Advancers'),0) or 0)}↑ / {int(_num(b.get('Decliners'),0) or 0)}↓ | Regime: {regime or '-'}"]
-
+    x=snapshot.get("VIX",{}) or {};rows.append(["VIX",_fmt(x.get("Close")),"-"]);b=snapshot.get("Breadth",{}) or {};return _table(["Index","Value","1D%"],rows)+[f"Breadth: {int(_num(b.get('Advancers'),0) or 0)}↑ / {int(_num(b.get('Decliners'),0) or 0)}↓ | Regime: {regime or '-'}"]
 def _scan(scan):
     scan=scan or {};vals={k:int(_num(scan.get(k),0) or 0) for k in ("Universe","Data","Liquid","AI","Selected")};return f"Scanned {vals['Universe']:,} | Data {vals['Data']:,} | Liquid {vals['Liquid']:,} | AI {vals['AI']:,} | Qualified {vals['Selected']:,}"
-
 def _score_col(g):
     for c in ("FinalDecisionScore","TradeConfidence","Score"):
         if c in g.columns:return c
     return None
-
 def _sort(g):
     c=_score_col(g);return g.sort_values(c,ascending=False,kind="mergesort") if c else g.sort_values("Symbol",kind="mergesort")
-
 def _bucket_sections(selected):
     if selected is None or selected.empty or "PriceBucket" not in selected.columns:return ["🎯 *QUALIFIED STOCKS BY PRICE BUCKET*","No high-confidence setup today."]
     lines=["🎯 *QUALIFIED STOCKS BY PRICE BUCKET*"];shown=0
@@ -139,7 +120,6 @@ def _bucket_sections(selected):
             rows.append([str(r.get("Symbol","-")),f"₹{_fmt(cp)}",_pct(exp),_pct(r.get("Horizon_1D")),_pct(r.get("Horizon_5D")),_pct(r.get("Horizon_20D")),_decision(r.get("Action"))]);shown+=1
         if rows:lines += [f"💎 *₹ {_bucket_label(bucket,g)}* | MAX 6",*_table(["Stock","CMP","Exp","1D","5D","20D","Action"],rows)]
     return lines if shown else ["🎯 *QUALIFIED STOCKS BY PRICE BUCKET*","No high-confidence setup today."]
-
 def _best_pick_table(selected):
     if selected is None or selected.empty or "PriceBucket" not in selected.columns:return []
     rows=[]
@@ -148,30 +128,22 @@ def _best_pick_table(selected):
         if g.empty:continue
         r=_sort(g).iloc[0];score=_num(r.get("FinalDecisionScore",r.get("Score")));rows.append([f"₹{_bucket_label(bucket,g)}",str(r.get("Symbol","-")),f"₹{_fmt(r.get('Current_Price',r.get('Current_Close')))}",_pct(r.get("Expected_Return")),"-" if score is None else f"{score:.0f}",_decision(r.get("Action"))])
     return ["🏆 *BEST PICK — 1 PER PRICE BUCKET*",*_table(["Bucket","Stock","CMP","Exp","Score","Action"],rows)] if rows else []
-
 def _prediction_table(selected):
     if selected is None or selected.empty:return []
     rows=[[str(r.get("Symbol","-")),_fmt(r.get("Pred_Open")),_fmt(r.get("Pred_High")),_fmt(r.get("Pred_Low")),_fmt(r.get("Pred_Close"))] for _,r in _sort(selected).head(10).iterrows()];return ["📈 *PREDICTED OHLC — TOP 10*",*_table(["Stock","Open","High","Low","Close"],rows)]
-
 def _horizon_value(r,h):
     for c in (f"Horizon_{h}D",f"Expected_Return_{h}D",f"Return_{h}D",f"Expected_{h}D"):
         if c in r.index:return r.get(c)
     return None
-
 def _horizon_status(r):
     vals=[_num(_horizon_value(r,h)) for h in REPORT_HORIZONS];vals=[v for v in vals if v is not None]
     if len(vals)<3:return "-"
-    positive=sum(v>0 for v in vals)
-    if positive==3:return "🟢 BULLISH"
-    if positive==2:return "🟡 MIXED"
-    return "🔴 WEAK"
-
+    positive=sum(v>0 for v in vals);return "🟢 BULLISH" if positive==3 else "🟡 MIXED" if positive==2 else "🔴 WEAK"
 def _horizon_table(selected):
     if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","No multi-horizon predictions available."]
     rows=[]
     for _,r in _sort(selected).head(10).iterrows():rows.append([str(r.get("Symbol","-"))]+[_pct(_horizon_value(r,h)) for h in REPORT_HORIZONS]+[_horizon_status(r)])
     return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","Short-term expected return by trading-day horizon.",*_table(["Stock","3D","7D","10D","Status"],rows,max_width=13)]
-
 def _jump(j):
     if j is None or j.empty:return ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
     x=j.copy()
@@ -183,14 +155,12 @@ def _jump(j):
         rows.append([str(r.get("Symbol","-")),f"₹{_fmt(cp)}",f"₹{_fmt(target)}",_pct((target/cp-1)*100),f"{max(0,min(100,prob or 0)):.0f}%"])
         if len(rows)==5:break
     return ["🔥 *JUMP WATCH — TOP 5*",*_table(["Stock","CMP","Target","Upside","Prob"],rows)] if rows else ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
-
 def _intraday(x):
     if x is None or x.empty:return ["⚡ *INTRADAY TOP 5*","No high-confidence intraday setup today."]
     rows=[]
     for _,r in x.head(5).iterrows():
         conf=max(0,min(100,_num(r.get("Confidence"),0) or 0));rows.append([str(r.get("Symbol","-")),_decision(r.get("Bias")),f"₹{_fmt(r.get('Current'))}",f"₹{_fmt(r.get('Target'))}",f"₹{_fmt(r.get('StopLoss'))}",f"{conf:.0f}%"])
     return ["⚡ *INTRADAY TOP 5*",*_table(["Stock","Bias","CMP","Target","SL","Conf"],rows)]
-
 def _ipo(x):
     if x is None or (hasattr(x,"empty") and x.empty):return ["🏦 *IPO INTELLIGENCE*","No active/upcoming IPOs."]
     y=x.copy()
@@ -198,22 +168,18 @@ def _ipo(x):
     rows=[]
     for _,r in y.head(5).iterrows():rows.append([str(r.get("IPOName","-")),str(r.get("Status",r.get("IPOStatus","-"))),f"₹{_fmt(r.get('PriceHigh',0),0)}",f"₹{_fmt(r.get('GMPValue',0),0)}",_pct(r.get("GMPPct",0)),_decision(r.get("IPOAction","WATCH"))])
     return ["🏦 *IPO INTELLIGENCE — TOP 5*","Subscription/GMP/valuation inputs are shown when supplied by the IPO feed.",*_table(["IPO","Status","Price","GMP","GMP%","AI View"],rows,max_width=14)]
-
 def _portfolio_horizon_status(x):
     vals=[_num(x.get(f"Horizon_{h}D")) for h in REPORT_HORIZONS];vals=[v for v in vals if v is not None]
     if len(vals)<3:return str(x.get("Portfolio_Target_Status",x.get("Target_Status","-")))
-    positive=sum(v>0 for v in vals)
-    return "🟢 BULLISH" if positive==3 else "🟡 MIXED" if positive==2 else "🔴 WEAK"
-
+    positive=sum(v>0 for v in vals);return "🟢 BULLISH" if positive==3 else "🟡 MIXED" if positive==2 else "🔴 WEAK"
 def _portfolio(p):
-    if not p:return []
+    lines=["💼 *AI PORTFOLIO MANAGER*","Target is policy-driven: 10% is the minimum fallback; higher targets require consistent multi-horizon evidence."]
+    if not p:return lines+["No portfolio positions available today."]
     rows=[]
     for x in p.get("Rows",[]):
         if not isinstance(x,dict):continue
-        target=x.get("Profit_Target",x.get("Sell_Target_Profit_Pct",x.get("Portfolio_Target_Pct")))
-        status=_portfolio_horizon_status(x)
+        target=x.get("Profit_Target",x.get("Sell_Target_Profit_Pct",x.get("Portfolio_Target_Pct")));status=_portfolio_horizon_status(x)
         rows.append([x.get("Stock","-"),x.get("Quantity","-"),_decision(x.get("Decision")),x.get("Current_Price","-"),x.get("Average_Price","-"),_pct(target) if _num(target) is not None else "-",status,str(x.get("Sell_Window",x.get("Sell_Date","-")))])
-    lines=["💼 *AI PORTFOLIO MANAGER*","Target is policy-driven: 10% is the minimum fallback; higher targets require consistent multi-horizon evidence."]
     if rows:lines += _table(["Stock","Qty","Decision","CMP","Avg","Target","Horizon","Sell Window"],rows,max_width=16)
     if p.get("AveragePlans"):
         ar=[]
@@ -226,51 +192,7 @@ def _portfolio(p):
             if isinstance(x,dict):sr.append([x.get("Stock","-"),x.get("Current_Price","-"),_pct(x.get("Portfolio_Target_Pct",x.get("Sell_Target_Profit_Pct"))),x.get("Sell_Window","NOW"),x.get("Reason","-")])
         if sr:lines += ["🚨 *SELL / PROFIT-BOOK ALERTS*"]+_table(["Stock","CMP","Target","When","Reason"],sr,max_width=18)
     return lines
-
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
     accuracy,scan=kwargs.get("accuracy",{}),kwargs.get("scan",{});snapshot,regime=kwargs.get("market_snapshot",{}),kwargs.get("regime","-");portfolio,ipo=kwargs.get("portfolio",{}),kwargs.get("ipo",pd.DataFrame())
     lines=[f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}",_SECTION,"📊 *MARKET OVERVIEW*",*_market(snapshot,regime),_scan(scan),f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))} | Samples {int(_num(accuracy.get('AccuracySamples',accuracy.get('Samples',0)),0) or 0)}",_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(ipo),_SECTION,*_portfolio(portfolio)]
-    return "\n".join(lines)
-
-def _diff_pct(predicted,actual):
-    p,a=_num(predicted),_num(actual);return None if p is None or a is None or abs(a)<1e-12 else (a-p)/abs(a)*100
-
-def _evaluation_bucket(row):
-    bucket=row.get("PriceBucket")
-    if bucket is not None and str(bucket).strip() not in {"","nan","None"}:return str(bucket)
-    price=_num(row.get("Actual_Close",row.get("Pred_Close")))
-    if price is None:return "UNKNOWN"
-    return "B7" if price<50 else "B6" if price<100 else "B5" if price<250 else "B4" if price<500 else "B3" if price<1000 else "B2" if price<2500 else "B1"
-
-def _evaluation_stock_tables(evaluation,market_date=None,limit=10):
-    if evaluation is None or evaluation.empty or "Symbol" not in evaluation.columns:return []
-    e=evaluation.copy()
-    if market_date is not None and "EvaluationDate" in e.columns:
-        d=e["EvaluationDate"].astype(str).str[:10];exact=e[d==str(market_date)[:10]]
-        if not exact.empty:e=exact
-    e=e.sort_values("EvaluationDate",kind="mergesort") if "EvaluationDate" in e.columns else e;e=e.drop_duplicates("Symbol",keep="last").copy();e["_bucket"]=e.apply(_evaluation_bucket,axis=1);sections=[];displayed=0
-    for bucket in _ordered_price_buckets(e["_bucket"]):
-        if displayed>=limit:break
-        g=e[e["_bucket"]==bucket]
-        for _,r in _sort(g).head(min(6,limit-displayed)).iterrows():
-            pred=[r.get("Pred_Open"),r.get("Pred_High"),r.get("Pred_Low"),r.get("Pred_Close")];actual=[r.get("Actual_Open"),r.get("Actual_High"),r.get("Actual_Low"),r.get("Actual_Close")]
-            table=_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]]])
-            sections.append("\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get('Symbol','-')).strip()}*",*table]))
-            displayed+=1
-            if displayed>=limit:break
-    return sections
-
-def evening_report(market_date,evaluation,metrics,retraining,**kwargs):
-    metrics,retraining=metrics or {},retraining or {};bucket_metrics=kwargs.get("bucket_metrics",{}) or {};horizon_metrics=kwargs.get("horizon_metrics",{}) or {};learning=kwargs.get("learning",{}) or {};accuracy=kwargs.get("accuracy",{}) or {};scan=kwargs.get("scan",{}) or {};portfolio=kwargs.get("portfolio",{}) or {}
-    overall_mape=_num(metrics.get("OverallMAPE"),100) or 100;close_mape=_num(metrics.get("CloseMAPE"),100) or 100
-    lines=[f"🌙 *AI NSE EVENING EVALUATION*\n📅 {market_date}\n⚙️ {MODEL_VERSION}",_SECTION,"📊 *MODEL PERFORMANCE*",f"Samples: {int(_num(metrics.get('Samples',0),0) or 0)} | Overall MAPE: {_pct(metrics.get('OverallMAPE'))}",f"Open MAPE: {_pct(metrics.get('OpenMAPE'))} | High MAPE: {_pct(metrics.get('HighMAPE'))}",f"Low MAPE: {_pct(metrics.get('LowMAPE'))} | Close MAPE: {_pct(metrics.get('CloseMAPE'))}",f"Accuracy: Overall {_accuracy(max(0,100-overall_mape))} | Close {_accuracy(max(0,100-close_mape))} | Direction {_accuracy(metrics.get('DirectionAccuracy'))}",_scan(scan),_SECTION,"📋 *PREDICTION vs ACTUAL*","Same morning Prediction_ID snapshot; each stock has exactly Predicted → Actual → Difference%."]
-    stock_sections=_evaluation_stock_tables(evaluation,market_date=market_date,limit=10);lines += [_SECTION.join(stock_sections)] if stock_sections else ["No completed stock evaluations."]
-    lines += [_SECTION,"🎯 *PRICE-BUCKET ACCURACY*"];brows=[[str(_bucket_label(k)),_accuracy(v.get("Accuracy") if isinstance(v,dict) else v)] for k,v in bucket_metrics.items()];lines += _table(["Price Bucket","Accuracy"],brows) if brows else ["No bucket metrics."]
-    if horizon_metrics:
-        lines += [_SECTION,"🔮 *HORIZON LEARNING*"];hrows=[]
-        for h in sorted(horizon_metrics,key=lambda x:int(x)):
-            m=horizon_metrics[h] or {};hrows.append([f"{h}D",int(_num(m.get("Samples"),0) or 0),_accuracy(m.get("Accuracy")),_accuracy(m.get("DirectionAccuracy"))])
-        lines += _table(["Horizon","N","Accuracy","Direction"],hrows)
-    lines += [_SECTION,"🧠 *MODEL LEARNING*",f"Retrained: {'YES' if retraining.get('Retrained',False) else 'NO'} | Decision: {str(retraining.get('Decision','-'))}",f"Improvement: {_pct(retraining.get('Improvement'))}",f"Previous accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → Current accuracy: {_accuracy(accuracy.get('CurrentAccuracy'))}",f"Learning state: {learning.get('status','-')} | Health: {learning.get('health','-')} | Drift: {_pct(learning.get('drift'))}",f"Rollback: {'YES' if learning.get('rollback') else 'NO'}"]
-    if portfolio:lines += [_SECTION,*_portfolio(portfolio)]
     return "\n".join(lines)
