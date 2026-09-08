@@ -2402,6 +2402,11 @@
           "DownsideHitProb_2Pct": 0.0013449832644002377
         }
       ]
+    },
+    {
+      "date": "2026-09-08",
+      "regime": "BEAR",
+      "selected": []
     }
   ],
   "last_update": "2026-09-08"
