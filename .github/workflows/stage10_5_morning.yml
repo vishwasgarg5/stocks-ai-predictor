@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   prediction:
-    if: github.event_name != 'push' || contains(github.event.head_commit.message, 'Run Stage 28 validation')
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, 'Update Stage 28 morning prediction state')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -47,7 +47,8 @@ jobs:
             tests/test_portfolio_stage28_hardening.py \
             tests/test_market_outlook.py \
             tests/test_data_snapshot.py \
-            tests/test_report_integrity.py
+            tests/test_report_integrity.py \
+            tests/test_prediction_lineage.py
       - name: Live market-data quality gate
         run: python -m src.live_quality_gate morning
       - name: Run Stage 28 morning prediction
