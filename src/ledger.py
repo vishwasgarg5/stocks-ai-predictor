@@ -26,19 +26,27 @@ def _baseline_columns(df,metadata=None):
 def prediction_exists(prediction_date):
     path=prediction_path(prediction_date)
     if not path.exists():return False
-    try:df=pd.read_csv(path);return len(df)>=1 and "Symbol" in df.columns and "Prediction_ID" in df.columns
+    try:
+        df=pd.read_csv(path);return len(df)>=1 and "Symbol" in df.columns and "Prediction_ID" in df.columns and df["Prediction_ID"].notna().all() and df["Prediction_ID"].astype(str).str.len().gt(1).all() and df["Symbol"].astype(str).nunique()==len(df)
     except Exception:return False
 def morning_report_sent(prediction_date):return False if os.getenv("GITHUB_EVENT_NAME")=="workflow_dispatch" else morning_report_path(prediction_date).exists()
 def mark_morning_report_sent(prediction_date):write_json(morning_report_path(prediction_date),{"PredictionDate":str(prediction_date),"ReportSent":True})
 def save_predictions(df,prediction_date,metadata=None):
     metadata=dict(metadata or {});metadata.setdefault("PredictionDate",str(prediction_date));metadata.setdefault("ModelVersion",MODEL_VERSION);metadata.setdefault("Stage",STAGE_NAME);path=prediction_path(prediction_date)
+    enriched=_baseline_columns(df,metadata)
+    if enriched.empty or "Symbol" not in enriched.columns:raise ValueError("Prediction ledger cannot be empty or missing Symbol")
+    if enriched["Symbol"].duplicated().any():raise ValueError("Prediction ledger contains duplicate symbols")
+    required=["Pred_Open","Pred_High","Pred_Low","Pred_Close"]
+    missing=[c for c in required if c not in enriched.columns]
+    if missing:raise ValueError(f"Prediction ledger missing OHLC columns: {missing}")
+    if enriched[required].isna().any().any():raise ValueError("Prediction ledger contains missing OHLC predictions")
     if path.exists():
         try:
             existing=pd.read_csv(path)
             if not existing.empty:return path
         except Exception:return path
-    enriched=_baseline_columns(df,metadata);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
-    metadata["PredictionLedgerVersion"]="v4";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist() if "Prediction_ID" in enriched else []
+    path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
+    metadata["PredictionLedgerVersion"]="v5";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist()
     write_json(path.with_suffix(".json"),metadata);return path
 def load_predictions(prediction_date):
     path=prediction_path(prediction_date)
@@ -63,16 +71,18 @@ def latest_prediction_date(on_or_before=None):
 def evaluation_exists(market_date):return evaluation_path(market_date).exists()
 def save_evaluation(df,market_date):
     path=evaluation_path(market_date);x=df.copy()
+    if x.empty or "Symbol" not in x.columns or "PredictionDate" not in x.columns:raise ValueError("Evaluation requires Symbol and PredictionDate")
     if "Prediction_ID" not in x.columns:x["Prediction_ID"]=""
-    # Bind each evaluation row to the immutable canonical morning record for its prediction date.
-    if "PredictionDate" in x.columns and "Symbol" in x.columns:
-        for pdate,idxs in x.groupby(x["PredictionDate"].astype(str)).groups.items():
-            canonical=load_predictions(pd.Timestamp(pdate).date())
-            if canonical.empty or "Prediction_ID" not in canonical.columns:continue
-            ids=canonical[["Symbol","Prediction_ID"]].drop_duplicates("Symbol").set_index("Symbol")["Prediction_ID"].to_dict()
-            for idx in idxs:
-                pid=ids.get(str(x.at[idx,"Symbol"]))
-                if pid:x.at[idx,"Prediction_ID"]=pid
+    for pdate,idxs in x.groupby(x["PredictionDate"].astype(str)).groups.items():
+        canonical=load_predictions(pd.Timestamp(pdate).date())
+        if canonical.empty or "Prediction_ID" not in canonical.columns:raise ValueError(f"Missing canonical prediction ledger for {pdate}")
+        ids=canonical[["Symbol","Prediction_ID"]].drop_duplicates("Symbol").set_index("Symbol")["Prediction_ID"].to_dict()
+        for idx in idxs:
+            pid=ids.get(str(x.at[idx,"Symbol"]))
+            if not pid:raise ValueError(f"No canonical Prediction_ID for {x.at[idx,'Symbol']} on {pdate}")
+            x.at[idx,"Prediction_ID"]=pid
+    if x["Prediction_ID"].isna().any() or (x["Prediction_ID"].astype(str).str.len()<2).any():raise ValueError("Evaluation contains unbound Prediction_ID")
+    if x.duplicated(["Prediction_ID","Symbol"],keep=False).any():raise ValueError("Evaluation contains duplicate prediction lineage")
     if path.exists():
         try:
             existing=pd.read_csv(path)
