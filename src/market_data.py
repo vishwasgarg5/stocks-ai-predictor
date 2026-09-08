@@ -175,11 +175,20 @@ def get_market_regime(cutoff_date=None):
     if len(df)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}
     close=pd.to_numeric(df["Close"],errors="coerce").dropna()
     if len(close)<60:return {"name":"SIDEWAYS","score":50,"confidence":35}
-    current=float(close.iloc[-1]);sma20=float(close.rolling(20).mean().iloc[-1]);sma50=float(close.rolling(50).mean().iloc[-1]);sma200=float(close.rolling(200).mean().iloc[-1]) if len(close)>=200 else sma50
-    ret20=(current/float(close.iloc[-21])-1)*100 if len(close)>=21 else 0.0;ret60=(current/float(close.iloc[-61])-1)*100 if len(close)>=61 else 0.0;vol=float(close.pct_change().rolling(20).std().iloc[-1]*100)
-    score=50.0+(10 if current>sma20 else -10)+(10 if current>sma50 else -10)+(10 if current>sma200 else -10)+(8 if ret20>2 else -8 if ret20<-2 else 0)+(7 if ret60>5 else -7 if ret60<-5 else 0)
+    sma20=close.rolling(20).mean().iloc[-1];sma50=close.rolling(50).mean().iloc[-1];sma200=close.rolling(200).mean().iloc[-1] if len(close)>=200 else sma50
+    ret20=(close.iloc[-1]/close.iloc[-21]-1)*100 if len(close)>=21 else 0.0
+    ret60=(close.iloc[-1]/close.iloc[-61]-1)*100 if len(close)>=61 else 0.0
+    vol=close.pct_change().rolling(20).std().iloc[-1]*100
+    current=close.iloc[-1];score=50.0
+    score += 10 if current>sma20 else -10
+    score += 10 if current>sma50 else -10
+    score += 10 if current>sma200 else -10
+    score += 8 if ret20>2 else -8 if ret20<-2 else 0
+    score += 7 if ret60>5 else -7 if ret60<-5 else 0
     if vol>2.5:score-=8
-    score=max(0,min(100,score));name="BULL" if score>=65 else "BEAR" if score<=40 else "SIDEWAYS";confidence=max(35,min(95,50+abs(score-50)*1.2))
+    score=max(0,min(100,score))
+    name="BULL" if score>=65 else "BEAR" if score<=40 else "SIDEWAYS"
+    confidence=max(35,min(95,50+abs(score-50)*1.2))
     return {"name":name,"score":score,"confidence":confidence,"SMA20":sma20,"SMA50":sma50,"SMA200":sma200,"Return20D":ret20,"Return60D":ret60,"Volatility20D":vol}
 def get_row_for_date(df,target_date):
     if df is None or df.empty:return None

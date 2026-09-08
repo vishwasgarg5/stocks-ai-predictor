@@ -254,7 +254,8 @@ def _evaluation_stock_tables(evaluation,market_date=None,limit=10):
         g=e[e["_bucket"]==bucket]
         for _,r in _sort(g).head(min(6,limit-displayed)).iterrows():
             pred=[r.get("Pred_Open"),r.get("Pred_High"),r.get("Pred_Low"),r.get("Pred_Close")];actual=[r.get("Actual_Open"),r.get("Actual_High"),r.get("Actual_Low"),r.get("Actual_Close")]
-            sections.append("\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get('Symbol','-')).strip()}*",*_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]])]))
+            table=_table(["Type","Open","High","Low","Close"],[["Predicted",*[_fmt(v) for v in pred]],["Actual",*[_fmt(v) for v in actual]],["Difference%",*[_pct(_diff_pct(p,a)) for p,a in zip(pred,actual)]]])
+            sections.append("\n".join([f"💎 *₹ {_bucket_label(bucket,g)}*",f"*{str(r.get('Symbol','-')).strip()}*",*table]))
             displayed+=1
             if displayed>=limit:break
     return sections

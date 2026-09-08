@@ -41,7 +41,7 @@ def _attach_horizons(candidates,data_map,cutoff_date):
                 current=float(row.get("Current_Price",0) or 0)
                 if not current:
                     valid=data_map[symbol][data_map[symbol].index<=pd.Timestamp(cutoff_date)];current=float(valid.iloc[-1]["Close"]) if not valid.empty else 0.0
-                for horizon in [1,3,5,7,20]:
+                for horizon in [1,3,5,7,10,20]:
                     m=h[h["HorizonDays"]==horizon]
                     if not m.empty:
                         expected=float(m.iloc[0]["Expected_Return"]);row[f"Horizon_{horizon}D"]=expected;row[f"Horizon_{horizon}D_Pred_Close"]=current*(1+expected/100) if current else 0.0;row[f"Horizon_{horizon}D_MAPE"]=float(m.iloc[0].get("ValidationMAPE",np.nan))
