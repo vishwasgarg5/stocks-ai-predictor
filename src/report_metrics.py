@@ -23,7 +23,6 @@ def model_report_metrics():
     if len(frames)>1:
         prior=pd.concat(frames[:-1],ignore_index=True)
         previous=_accuracy_from_mape(prior["APE_Close"].abs().mean()) if "APE_Close" in prior else None
-    # Direction accuracy is always calculated from validated observations.
     direction=float(all_data["DirectionCorrect"].mean()*100) if "DirectionCorrect" in all_data else None
     daily=[]
     for d in frames:
@@ -35,8 +34,7 @@ def model_report_metrics():
     if len(daily)>=3 and trend7 is not None and trend30 is not None and abs(trend7-trend30)>=10: drift="HIGH"
     elif len(daily)>=2 and abs(daily[-1]-daily[-2])>=5: drift="MEDIUM"
     out={"PreviousAccuracy":previous,"CurrentAccuracy":close_acc,"AccuracySamples":len(all_data),"DirectionAccuracy":direction,"Health":health,"Drift":drift,"Trend7D":trend7,"Trend30D":trend30}
-    # Optional horizon evaluation files/columns are supported without inventing accuracy.
-    for h in [1,3,5,7,20]:
+    for h in [1,3,5,7,10,20]:
         col=f"APE_Close_{h}D"
         if col in all_data: out[f"{h}D"]=_accuracy_from_mape(all_data[col].abs().mean())
     return out
