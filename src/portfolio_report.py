@@ -78,6 +78,29 @@ def _num(row,name,default=np.nan):
     try:v=float(row.get(name,default));return v if np.isfinite(v) else default
     except Exception:return default
 def _forecast_return(row):return [(h,_num(row,f"Horizon_{h}D")) for h in (1,3,5,7,10,20,60,90,180,365) if np.isfinite(_num(row,f"Horizon_{h}D"))]
+def _sell_plan(row,current_price,avg_price,prediction_date):
+    """Return dynamic profit target, price, horizon/date and status.
+
+    A target above the 10% floor is allowed only when AI confidence is at
+    least MIN_AI_CONFIDENCE. Long-horizon forecasts (20D+) determine the
+    target; the earliest horizon attaining the selected target is the sell
+    window. When no horizon reaches the floor, remain in WAIT state.
+    """
+    avg=_num({"v":avg_price},"v")
+    confidence=_num(row,"AI_Confidence",_num(row,"Confidence",0.0))
+    candidates=[]
+    for h in (20,60,90,180,365):
+        value=_num(row,f"Horizon_{h}D")
+        if np.isfinite(value) and value>=TARGET_PROFIT_PCT:candidates.append((h,value))
+    if confidence < MIN_AI_CONFIDENCE or not candidates:
+        profit=TARGET_PROFIT_PCT
+        price=round(avg*(1+profit/100),10) if np.isfinite(avg) and avg>0 else np.nan
+        if not candidates:return profit,price,"-","-","WAIT"
+        h=max(candidates,key=lambda x:(x[1],-x[0]))[0]
+        return profit,price,f"{h}D",_next_trading_date(prediction_date,h),"TARGET_DATE"
+    h,profit=max(candidates,key=lambda x:(x[1],-x[0]))
+    price=round(avg*(1+profit/100),10) if np.isfinite(avg) and avg>0 else np.nan
+    return float(profit),price,f"{h}D",_next_trading_date(prediction_date,h),"TARGET_DATE"
 def _decision(current,avg,target,confidence,forecasts):
     if current is None or not np.isfinite(current) or not np.isfinite(avg) or avg<=0:return "WAIT","NO PRICE / COST DATA"
     if not np.isfinite(target):return "HOLD","AI PREDICTION UNAVAILABLE"
