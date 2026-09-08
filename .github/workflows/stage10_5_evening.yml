@@ -2,7 +2,7 @@ name: Stage 10.5 Evening Evaluation & Learning
 
 on:
   schedule:
-    - cron: "10 10 * * 1-5" # 15:40 IST, Monday-Friday
+    - cron: "00 11 * * 1-5" # 16:30 IST, Monday-Friday
   workflow_dispatch:
 
 concurrency:
