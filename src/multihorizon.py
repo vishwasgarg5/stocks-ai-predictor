@@ -1,11 +1,12 @@
-"""Multi-horizon close/return forecasting for 1/3/5/7/10/20/60/90/180/365 sessions."""
+"""Robust multi-horizon close/return forecasting through 365 trading days."""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import ExtraTreesRegressor,RandomForestRegressor
 from xgboost import XGBRegressor
 from .features import build_features,get_feature_columns
-HORIZONS=(1,3,5,7,10,20,60,90,180,365)
+from .config import MULTI_HORIZONS
+HORIZONS=tuple(MULTI_HORIZONS)
 
 def _models(seed=42):
     return [XGBRegressor(n_estimators=180,max_depth=4,learning_rate=0.04,subsample=0.85,colsample_bytree=0.85,objective="reg:squarederror",random_state=seed,n_jobs=2),RandomForestRegressor(n_estimators=180,max_depth=10,min_samples_leaf=2,random_state=seed,n_jobs=2),ExtraTreesRegressor(n_estimators=180,max_depth=12,min_samples_leaf=2,random_state=seed,n_jobs=2)]
@@ -27,9 +28,13 @@ def train_horizon_models(df,cutoff_date):
     x=build_features(df);x=x[x.index<=pd.Timestamp(cutoff_date)].copy();features=get_feature_columns();result={"features":features,"horizons":{}}
     for h in HORIZONS:
         work=x[features].copy();work["target_close"]=x["Close"].shift(-h);work["target_return"]=(x["Close"].shift(-h)/x["Close"]-1)*100;work=work.replace([np.inf,-np.inf],np.nan).dropna()
+        # Require enough history for a genuine chronological validation window.
         minimum=max(150,100+h)
-        if len(work)<minimum:continue
-        try:result["horizons"][h]={"close":_train_target(work,features,"target_close",h),"return":_train_target(work,features,"target_return",h)}
+        if len(work)<minimum:
+            print(f"Horizon {h}D training skipped: {len(work)} rows < {minimum}")
+            continue
+        try:
+            result["horizons"][h]={"close":_train_target(work,features,"target_close",h),"return":_train_target(work,features,"target_return",h)}
         except Exception as exc:print(f"Horizon {h}D training skipped: {exc}")
     if not result["horizons"]:raise ValueError("No multi-horizon models could be trained")
     return result
