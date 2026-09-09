@@ -15,81 +15,30 @@ jobs:
         with: {python-version: '3.11'}
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Apply compatibility and hardening fixes
+      - name: Apply final compatibility fix
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
-
-          def edit(path, fn):
-              p=Path(path); s=p.read_text(); n=fn(s); p.write_text(n); print(path, 'changed' if n!=s else 'unchanged')
-
-          edit('src/config.py', lambda s: s.replace('HISTORY_PERIOD="5y"','HISTORY_PERIOD="3y"'))
-
-          def selection(s):
-              old='''    if strict.empty:strict=_apply_uncertainty_cap(scored.copy());fallback_mode=True\n    if strict.empty:strict=scored.copy();fallback_mode=True\n'''
-              new='''    # Never promote DOWN/negative-return rows merely to fill the list.\n    if strict.empty:\n        strict=_apply_uncertainty_cap(scored[scored["Direction"].astype(str).str.upper().eq("UP")].copy())\n    if strict.empty:\n        strict=scored[scored["Direction"].astype(str).str.upper().eq("UP")].copy()\n'''
-              s=s.replace(old,new)
-              # Also remove later pool fallback that could reintroduce DOWN rows.
-              s=s.replace('''        pool=_bucket_cap(_apply_uncertainty_cap(scored.copy()),max_per_bucket)\n        if len(pool)<n:pool=_bucket_cap(scored.copy(),max_per_bucket)\n''','''        pool=_bucket_cap(_apply_uncertainty_cap(scored[scored["Direction"].astype(str).str.upper().eq("UP")].copy()),max_per_bucket)\n        if len(pool)<n:pool=_bucket_cap(scored[scored["Direction"].astype(str).str.upper().eq("UP")].copy(),max_per_bucket)\n''')
-              return s
-          edit('src/selection.py', selection)
-
-          def final_intel(s):
-              s=s.replace('pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0).apply(net_expected_return)', 'pd.Series(pd.to_numeric(out.get("Expected_Return",pd.Series(0,index=out.index)),errors="coerce"),index=out.index).fillna(0).apply(net_expected_return)')
-              s=s.replace('pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-pd.to_numeric(out.get("BenchmarkExpectedReturn",0),errors="coerce").fillna(0)', 'pd.Series(pd.to_numeric(out.get("Expected_Return",pd.Series(0,index=out.index)),errors="coerce"),index=out.index).fillna(0)-pd.Series(pd.to_numeric(out.get("BenchmarkExpectedReturn",pd.Series(0,index=out.index)),errors="coerce"),index=out.index).fillna(0)')
-              s=s.replace('pd.to_numeric(out.get("PredictionUncertaintyPct",0),errors="coerce").fillna(0)>15', 'pd.Series(pd.to_numeric(out.get("PredictionUncertaintyPct",pd.Series(0,index=out.index)),errors="coerce"),index=out.index).fillna(0)>15')
-              return s
-          edit('src/final_intelligence.py', final_intel)
-
-          def portfolio(s):
-              # Decision must sell at the actual 10% cost target, with floating tolerance.
-              s=s.replace('if c>=profit_target:return "SELL","10% profit target reached"','if c >= profit_target - 1e-9:return "SELL","10% profit target reached"')
-              if 'def _attach_predictions(' not in s:
-                  marker='def _plan_row('
-                  helper='''def _attach_predictions(portfolio):\n    """Attach the latest canonical morning predictions by normalized NSE symbol."""\n    if portfolio is None or portfolio.empty:\n        return portfolio.copy() if hasattr(portfolio, "copy") else portfolio, None\n    predictions,prediction_date=_latest_predictions()\n    out=portfolio.copy()\n    if predictions is None or predictions.empty or "Symbol" not in predictions.columns:\n        return out,prediction_date\n    p=predictions.copy()\n    p["_key"]=p["Symbol"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    out["_key"]=out["Ticker"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    cols=[c for c in p.columns if c not in {"_key","Symbol"}]\n    lookup=p.drop_duplicates("_key",keep="last").set_index("_key")\n    for c in cols: out[c]=out["_key"].map(lookup[c])\n    return out.drop(columns=["_key"]),prediction_date\n\n'''
-                  s=s.replace(marker,helper+marker)
-              # Replace temporary/incorrect sell-plan implementation with deterministic highest reliable qualifying horizon.
-              start=s.find('def _sell_plan(')
-              if start>=0:
-                  end=s.find('\n',s.find('return profit, price, window, date,',start))
-                  # include the return line and following newline
-                  end=s.find('\n',end+1) if end>=0 else len(s)
-                  block='''def _sell_plan(row, current_price, average_price, cutoff_date):\n    current=float(current_price); avg=float(average_price); minimum=float(TARGET_PROFIT_PCT)\n    confidence=_num(row, "AI_Confidence", 0.0)\n    horizons=(1,3,5,7,20,60,90,180,365)\n    candidates=[]\n    for h in horizons:\n        v=_num(row, f"Horizon_{h}D")\n        if np.isfinite(v): candidates.append((h,float(v)))\n    qualifying=[x for x in candidates if x[1] >= minimum]\n    if not qualifying: return minimum,avg*(1+minimum/100),"WAIT","-","WAIT"\n    best=max(qualifying,key=lambda x:(x[1],-x[0]))\n    profit=float(best[1]) if np.isfinite(confidence) and confidence>=MIN_AI_CONFIDENCE else minimum\n    price=avg*(1+profit/100); window=f"{best[0]}D TARGET"; date=_next_trading_date(cutoff_date,best[0])\n    return profit,price,window,date,"TARGET_DATE"\n'''
-                  s=s[:start]+block+s[end:]
-              return s
-          edit('src/portfolio_report.py', portfolio)
-
-          def telegram(s):
-              s=s.replace('return ["📈 *PREDICTED OHLC — TOP 10*",*_table(["Stock","Open","High","Low","Close"],rows)]','return [f"📈 *PREDICTED OHLC — TOP {len(rows)}*",*_table(["Stock","Open","High","Low","Close"],rows)]')
-              s=s.replace('return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","No multi-horizon predictions available."]','return ["🔮 *MULTI-HORIZON OUTLOOK*","No multi-horizon predictions available."]')
-              s=s.replace('return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","3D / 7D / 10D / 20D / 60D / 180D / 365D trading-day expected return.",*_table(["Stock","3D","7D","10D","20D","60D","180D","365D","Status"],rows,max_width=11)]','return [f"🔮 *MULTI-HORIZON OUTLOOK — TOP {len(rows)}*","3D / 7D / 10D / 20D / 60D / 180D / 365D trading-day expected return.",*_table(["Stock","3D","7D","10D","20D","60D","180D","365D","Status"],rows,max_width=11)]')
-              s=s.replace('target if _num(target) is not None else "-",_portfolio_horizon_status(x)', '_pct(target) if _num(target) is not None else "-",_portfolio_horizon_status(x)')
-              s=s.replace('["Stock","Qty","Decision","CMP","Avg","AI Target","Return","10% Target","Horizon","Sell Window"]','["Stock","Qty","Decision","CMP","Avg","AI Target","Return","Target","Horizon","Sell Window"]')
-              # Expose dynamic target probability/horizon when present.
-              old='''    if rows:lines += _table(["Stock","Qty","Decision","CMP","Avg","AI Target","Return","Target","Horizon","Sell Window"],rows,max_width=14)\n    return lines\n'''
-              new='''    if rows:\n        lines += _table(["Stock","Qty","Decision","CMP","Avg","AI Target","Return","Target","Horizon","Sell Window"],rows,max_width=14)\n        long_h=[]\n        for x in p.get("Rows",[]):\n            if not isinstance(x,dict): continue\n            vals=[_num(x.get(f"Horizon_{h}D")) for h in (60,90,180,365)]\n            if any(v is not None for v in vals): long_h.append([x.get("Stock","-"),*_pct(v) for v in vals])\n        if long_h:\n            lines += ["🔮 *PORTFOLIO LONG-HORIZON RECOVERY*",*_table(["Stock","60D","90D","180D","365D"],long_h)]\n    else: lines += ["No portfolio positions available today."]\n    return lines\n'''
-              # avoid invalid starred comprehension by using explicit list construction
-              new=new.replace('[x.get("Stock","-"),*_pct(v) for v in vals]','[x.get("Stock","-"),_pct(vals[0]),_pct(vals[1]),_pct(vals[2]),_pct(vals[3])]')
-              s=s.replace(old,new)
-              # Explicit no-signal text required by regression contract.
-              s=s.replace('return lines if shown else ["🎯 *PREDICTION SET BY PRICE BUCKET*","No prediction candidates available."]','return lines if shown else ["🎯 *PREDICTION SET BY PRICE BUCKET*","No high-confidence setup today."]')
-              # Dynamic morning horizon fixture: ensure empty sections still mention configured long horizons.
-              s=s.replace('if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK*","No multi-horizon predictions available."]','if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK*","No multi-horizon predictions available (60D / 90D / 180D / 365D)."]')
-              return s
-          edit('src/telegram_report.py', telegram)
-
-          # Remove all temporary repair workflows; production contract is exactly three workflows.
-          for name in ['.github/workflows/_fix_dynamic_sell.yml','.github/workflows/repair_portfolio_now.yml']:
-              p=Path(name)
-              if p.exists(): p.unlink(); print('removed',name)
+          p=Path('src/portfolio_report.py')
+          s=p.read_text()
+          if 'def _sell_plan(' not in s:
+              s += '''\n\n# Dynamic sell-plan compatibility helpers.\ndef _sell_plan(row, current_price, average_price, cutoff_date):\n    current=float(current_price); avg=float(average_price); minimum=float(TARGET_PROFIT_PCT)\n    confidence=_num(row, "AI_Confidence", 0.0)\n    horizons=(1,3,5,7,10,20,60,90,180,365)\n    candidates=[]\n    for h in horizons:\n        v=_num(row, f"Horizon_{h}D")\n        if np.isfinite(v): candidates.append((h,float(v)))\n    qualifying=[x for x in candidates if x[1] >= minimum]\n    if not qualifying:\n        return minimum, avg*(1+minimum/100), "WAIT", "-", "WAIT"\n    best=max(qualifying, key=lambda x:(x[1],-x[0]))\n    profit=float(best[1]) if np.isfinite(confidence) and confidence >= MIN_AI_CONFIDENCE else minimum\n    price=avg*(1+profit/100)\n    window=f"{best[0]}D TARGET"\n    date=_next_trading_date(cutoff_date,best[0])\n    return profit, price, window, date, "TARGET_DATE"\n'''
+              p.write_text(s)
           PY
-      - name: Validate and commit
+      - name: Validate full regression suite
         run: |
           python -m compileall -q src
           pytest -q tests/
+      - name: Commit and push validated fix
+        run: |
           git config user.name 'stocks-ai-predictor'
           git config user.email 'actions@github.com'
-          git add src .github/workflows
-          git commit -m 'Fix Stage 28 regression suite and harden reports' || true
+          git add src/portfolio_report.py
+          git diff --cached --quiet || git commit -m 'Fix missing dynamic portfolio sell helper'
           git push
+      - name: Remove temporary repair workflow
+        if: success()
+        run: |
+          git rm -f .github/workflows/repair_portfolio_now.yml .github/workflows/_fix_dynamic_sell.yml 2>/dev/null || true
+          git commit -m 'Remove temporary repair workflows' || true
+          git push || true
