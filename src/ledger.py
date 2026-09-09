@@ -58,8 +58,7 @@ def save_predictions(df,prediction_date,metadata=None):
             existing=pd.read_csv(path)
             if not existing.empty:
                 if not _valid_prediction_ledger(existing):raise ValueError("Existing prediction ledger is corrupt and will not be overwritten")
-                enriched=_baseline_columns(df,metadata)
-                new_ids=set(enriched.get("Prediction_ID",pd.Series(dtype=str)).astype(str));old_ids=set(existing["Prediction_ID"].astype(str))
+                enriched=_baseline_columns(df,metadata);new_ids=set(enriched.get("Prediction_ID",pd.Series(dtype=str)).astype(str));old_ids=set(existing["Prediction_ID"].astype(str))
                 if old_ids!=new_ids:raise ValueError("Prediction ledger is immutable: existing Prediction_ID set differs")
                 return path
         except ValueError:raise
@@ -77,7 +76,6 @@ def load_predictions(prediction_date):
         if "Prediction_ID" not in df.columns:df=_baseline_columns(df,{"PredictionDate":str(prediction_date)})
         return df
     except Exception:return pd.DataFrame()
-
 def load_jump_predictions(prediction_date):path=jump_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
 def load_intraday_predictions(prediction_date):path=intraday_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
 def save_jump_predictions(df,prediction_date):path=jump_path(prediction_date);df.to_csv(path,index=False);return path
@@ -134,13 +132,18 @@ def rebuild_stock_reliability():
             if not df.empty:frames.append(df)
         except Exception:continue
     if not frames:return
-    data=pd.concat(frames,ignore_index=True);rows=[]
+    data=pd.concat(frames,ignore_index=True)
+    if "MarketDate" in data.columns:data=data.sort_values("MarketDate")
+    rows=[]
     for symbol,group in data.groupby("Symbol"):
+        group=group.copy()
         apes=[]
         for target in ["Open","High","Low","Close"]:
             col=f"APE_{target}"
             if col in group.columns:apes.append(pd.to_numeric(group[col],errors="coerce").abs().mean())
-        close_ape=float(pd.to_numeric(group.get("APE_Close",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Close" in group else 3.0
+        close_series=pd.to_numeric(group.get("APE_Close",pd.Series(dtype=float)),errors="coerce").abs()
+        close_ape=float(close_series.mean()) if not close_series.dropna().empty else 3.0
+        recent_ape=float(close_series.tail(min(5,len(close_series))).mean()) if not close_series.tail(min(5,len(close_series))).dropna().empty else close_ape
         direction=float(pd.to_numeric(group.get("DirectionCorrect",pd.Series(dtype=float)),errors="coerce").mean()*100) if "DirectionCorrect" in group else 50.0
-        rows.append({"Symbol":symbol,"Samples":len(group),"MAPE":float(sum(apes)/len(apes)) if apes else close_ape,"MAPE_Open":float(pd.to_numeric(group.get("APE_Open",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Open" in group else close_ape,"MAPE_High":float(pd.to_numeric(group.get("APE_High",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_High" in group else close_ape,"MAPE_Low":float(pd.to_numeric(group.get("APE_Low",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Low" in group else close_ape,"MAPE_Close":close_ape,"DirectionAccuracy":direction})
+        rows.append({"Symbol":symbol,"Samples":len(group),"MAPE":float(sum(apes)/len(apes)) if apes else close_ape,"RecentMAPE":recent_ape,"MAPE_Open":float(pd.to_numeric(group.get("APE_Open",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Open" in group else close_ape,"MAPE_High":float(pd.to_numeric(group.get("APE_High",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_High" in group else close_ape,"MAPE_Low":float(pd.to_numeric(group.get("APE_Low",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Low" in group else close_ape,"MAPE_Close":close_ape,"DirectionAccuracy":direction})
     pd.DataFrame(rows).to_csv(STOCK_RELIABILITY_FILE,index=False)
