@@ -1,0 +1,29 @@
+{
+  "version": "final-v9",
+  "observations": [
+    {
+      "date": "2026-09-09",
+      "regime": "BEAR",
+      "selected": [
+        {
+          "Symbol": "BEML",
+          "PriceBucket": "B2",
+          "VolatilityBucket": "MEDIUM",
+          "VolatilityPct": 1.7146117404960817,
+          "CrossSectionPercentile": 50.0,
+          "SectorRelative20D": 0.0,
+          "BenchmarkEdgePct": 2.601615634491461,
+          "RiskAdjustedReturn": 0.4973488811572829,
+          "FinalDecisionScore": 59.136415765869344,
+          "Action": "NO TRADE",
+          "FinalRisk": "MEDIUM",
+          "CalibratedConfidence": 80.32197876300334,
+          "PredictionUncertaintyPct": 1.7102616257111272,
+          "TargetHitProb_3_0Pct": 22.174887921113775,
+          "DownsideHitProb_2Pct": 84.13124092188663
+        }
+      ]
+    }
+  ],
+  "last_update": "2026-09-09"
+}

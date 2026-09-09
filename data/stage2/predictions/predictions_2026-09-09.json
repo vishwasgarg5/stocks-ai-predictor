@@ -1,0 +1,311 @@
+{
+  "Stage": "Stage 28 (AI Investment Command Center)",
+  "PredictionDate": "2026-09-09",
+  "DataCutoff": "2026-09-08",
+  "ModelVariant": "A",
+  "ModelVersion": "stage28-v1.0",
+  "Regime": "BEAR",
+  "MarketSnapshot": {
+    "NIFTY": {
+      "Close": 23635.099609375,
+      "Change1D": -0.605786072604142,
+      "Open": 23743.099609375,
+      "High": 23758.94921875,
+      "Low": 23623.099609375,
+      "High52W": 24774.30078125,
+      "Low52W": 23070.150390625,
+      "Source": "^NSEI",
+      "DataDate": "2026-09-08",
+      "IndexKey": "NIFTY"
+    },
+    "BANKNIFTY": {
+      "Close": 56777.55078125,
+      "Change1D": -0.5443321937199097,
+      "Open": 56990.3984375,
+      "High": 57044.0,
+      "Low": 56720.44921875,
+      "High52W": 58706.05078125,
+      "Low52W": 53843.30078125,
+      "Source": "^NSEBANK",
+      "DataDate": "2026-09-08",
+      "IndexKey": "BANK"
+    },
+    "FINNIFTY": {
+      "Close": 26903.349609375,
+      "Change1D": 1.3053218239571507,
+      "Open": 26630.900390625,
+      "High": 26959.849609375,
+      "Low": 26569.30078125,
+      "High52W": 27127.150390625,
+      "Low52W": 24734.44921875,
+      "Source": "NIFTY_FIN_SERVICE.NS",
+      "DataDate": "2026-07-17",
+      "IndexKey": "FINN"
+    },
+    "MIDCPNIFTY": {
+      "Close": 18093.0,
+      "Change1D": 0.22934472025126773,
+      "Open": 18037.94921875,
+      "High": 18109.55078125,
+      "Low": 17984.900390625,
+      "High52W": 18500.94921875,
+      "Low52W": 16832.900390625,
+      "Source": "^NSEMDCP50",
+      "DataDate": "2026-09-08",
+      "IndexKey": "MIDCP"
+    },
+    "VIX": {
+      "Close": 11.229999542236328,
+      "Change1D": 0.6272374173952322,
+      "Open": 11.15999984741211,
+      "High": 11.399999618530273,
+      "Low": 10.449999809265137,
+      "High52W": 18.440000534057617,
+      "Low52W": 9.25,
+      "Source": "^INDIAVIX",
+      "DataDate": "2026-09-08",
+      "IndexKey": "VIX"
+    },
+    "NIFTYNEXT50": {
+      "Close": 72950.6484375,
+      "Change1D": 0.5165615753195851,
+      "Open": 72592.546875,
+      "High": 72957.203125,
+      "Low": 72466.75,
+      "High52W": 75000.3984375,
+      "Low52W": 68282.796875,
+      "Source": "^NSMIDCP",
+      "DataDate": "2026-09-08",
+      "IndexKey": "NIFTYNEXT50"
+    },
+    "NIFTY100": {
+      "Close": 24803.900390625,
+      "Change1D": -0.39634102582946085,
+      "Open": 24872.94921875,
+      "High": 24888.349609375,
+      "Low": 24781.5,
+      "High52W": 25880.650390625,
+      "Low52W": 24036.349609375,
+      "Source": "^CNX100",
+      "DataDate": "2026-09-08",
+      "IndexKey": "NIFTY100"
+    },
+    "NIFTY200": {
+      "Close": 13804.099609375,
+      "Change1D": -0.2738071855584501,
+      "Open": 13829.5498046875,
+      "High": 13835.849609375,
+      "Low": 13784.400390625,
+      "High52W": 14315.150390625,
+      "Low52W": 13300.900390625,
+      "Source": "^CNX200",
+      "DataDate": "2026-09-08",
+      "IndexKey": "NIFTY200"
+    },
+    "NIFTY500": {
+      "Close": 23106.099609375,
+      "Change1D": -0.21635506285692108,
+      "Open": 23142.44921875,
+      "High": 23151.44921875,
+      "Low": 23063.75,
+      "High52W": 23803.75,
+      "Low52W": 22063.75,
+      "Source": "^CRSLDX",
+      "DataDate": "2026-09-08",
+      "IndexKey": "NIFTY500"
+    },
+    "MIDCAP150": {
+      "Close": null,
+      "Change1D": null,
+      "Open": null,
+      "High": null,
+      "Low": null,
+      "High52W": null,
+      "Low52W": null,
+      "Source": "unavailable",
+      "IndexKey": "MIDCAP150"
+    },
+    "SMALLCAP250": {
+      "Close": 20133.75,
+      "Change1D": 0.0,
+      "Open": 20121.55078125,
+      "High": 20142.30078125,
+      "Low": 20027.25,
+      "High52W": 20142.30078125,
+      "Low52W": 20027.25,
+      "Source": "^CNXSC",
+      "DataDate": "2026-09-08",
+      "IndexKey": "SMALLCAP250"
+    },
+    "IT": {
+      "Close": 29883.5,
+      "Change1D": -0.3723903213157409,
+      "Open": 30032.30078125,
+      "High": 30078.75,
+      "Low": 29722.900390625,
+      "High52W": 31955.0,
+      "Low52W": 25699.099609375,
+      "Source": "^CNXIT",
+      "DataDate": "2026-09-08",
+      "IndexKey": "IT"
+    },
+    "AUTO": {
+      "Close": 27099.75,
+      "Change1D": 1.241051979184804,
+      "Open": 26777.150390625,
+      "High": 27120.75,
+      "Low": 26765.75,
+      "High52W": 27452.80078125,
+      "Low52W": 25516.599609375,
+      "Source": "^CNXAUTO",
+      "DataDate": "2026-07-17",
+      "IndexKey": "AUTO"
+    },
+    "PHARMA": {
+      "Close": 26880.80078125,
+      "Change1D": 0.7696229920713726,
+      "Open": 26685.150390625,
+      "High": 26930.099609375,
+      "Low": 26581.150390625,
+      "High52W": 27188.44921875,
+      "Low52W": 24020.55078125,
+      "Source": "^CNXPHARMA",
+      "DataDate": "2026-09-08",
+      "IndexKey": "PHARMA"
+    },
+    "METAL": {
+      "Close": 12436.9501953125,
+      "Change1D": -0.47175628381871393,
+      "Open": 12486.5,
+      "High": 12501.650390625,
+      "Low": 12325.7001953125,
+      "High52W": 13931.349609375,
+      "Low52W": 12325.7001953125,
+      "Source": "^CNXMETAL",
+      "DataDate": "2026-07-17",
+      "IndexKey": "METAL"
+    },
+    "ENERGY": {
+      "Close": 39277.0,
+      "Change1D": -0.17486181468896467,
+      "Open": 39418.6015625,
+      "High": 39467.8515625,
+      "Low": 39180.6015625,
+      "High52W": 40879.05078125,
+      "Low52W": 38554.3515625,
+      "Source": "^CNXENERGY",
+      "DataDate": "2026-07-17",
+      "IndexKey": "ENERGY"
+    },
+    "REALTY": {
+      "Close": 918.7000122070312,
+      "Change1D": 1.3849790271852402,
+      "Open": 906.0499877929688,
+      "High": 922.2000122070312,
+      "Low": 901.6500244140625,
+      "High52W": 939.5999755859375,
+      "Low52W": 738.4500122070312,
+      "Source": "^CNXREALTY",
+      "DataDate": "2026-07-17",
+      "IndexKey": "REALTY"
+    },
+    "PSUBANK": {
+      "Close": 8381.75,
+      "Change1D": 0.4054865030854282,
+      "Open": 8352.4501953125,
+      "High": 8403.9501953125,
+      "Low": 8321.9501953125,
+      "High52W": 8800.150390625,
+      "Low52W": 8034.2001953125,
+      "Source": "^CNXPSUBANK",
+      "DataDate": "2026-07-17",
+      "IndexKey": "PSUBANK"
+    },
+    "Breadth": {
+      "Advancers": 657,
+      "Decliners": 781,
+      "Unchanged": 6,
+      "Ratio": 0.8412291933418694,
+      "Score": 45.6884561891516
+    },
+    "RegimePrediction": {
+      "name": "BEAR",
+      "score": 12.0,
+      "confidence": 95,
+      "SMA20": 24123.32001953125,
+      "SMA50": 24196.318984375,
+      "SMA200": 24589.321796875,
+      "Return20D": -3.4186412716858072,
+      "Return60D": -0.9172536887761651,
+      "Volatility20D": 0.3567407398604346
+    }
+  },
+  "BenchmarkSymbol": "^NSEI",
+  "BenchmarkExpectedReturn5D": -1.7488554037365933,
+  "PriceBuckets": [
+    ">2500",
+    "1000-2499",
+    "500-999",
+    "250-499",
+    "100-249",
+    "50-99",
+    "10-49"
+  ],
+  "MaxSelectedStocks": 10,
+  "GlobalTopNCap": true,
+  "PredictionCandidatePool": 10,
+  "MultiHorizonTopN": 10,
+  "MultiHorizons": [
+    1,
+    3,
+    5,
+    7,
+    10,
+    20,
+    60,
+    90,
+    180,
+    365
+  ],
+  "FinalIntelligence": true,
+  "TargetHitLevels": [
+    1,
+    2,
+    3,
+    5
+  ],
+  "VolatilityBuckets": [
+    "LOW",
+    "MEDIUM",
+    "HIGH"
+  ],
+  "CrossSectionalRanking": true,
+  "SectorRelativeStrength": true,
+  "AdaptiveThresholds": true,
+  "Abstention": true,
+  "Manifest": {
+    "Stage10.5": "Adaptive probability, reliability, risk, cost, portfolio timing and exit learning",
+    "Validation": "Historical classifiers use only closed/evaluated outcomes; primary model remains walk-forward",
+    "Abstention": "NO TRADE for materially uncertain, weak-data or high-downside cases",
+    "Learning": "Outcomes, horizon decay, drift, quarantine and rollback"
+  },
+  "SelectedStocks": [
+    "BEML"
+  ],
+  "StocksScanned": 2571,
+  "DataStocks": 2324,
+  "PreScreen": 150,
+  "AI": 12,
+  "LiquidStocks": 1444,
+  "PredictionLedgerVersion": "v8",
+  "PredictionLedgerKey": "Prediction_ID",
+  "Baseline": "Previous_Close",
+  "BaselineCostBps": 30.0,
+  "PredictionIDs": [
+    "P7e57c9f3f8b62f94"
+  ],
+  "SelectionIntegrity": {
+    "MaxStocks": 10,
+    "MaxPerPriceBucket": 6
+  }
+}

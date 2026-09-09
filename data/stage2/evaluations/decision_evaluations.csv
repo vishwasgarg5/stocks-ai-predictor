@@ -1,0 +1,2 @@
+Prediction_ID,PredictionDate,EvaluationDate,Symbol,PriceBucket,Action,DecisionScore,Confidence,ExpectedReturn,PredictionUncertainty,TechnicalScore,EntryPrice,PredictedClose,ActualOpen,ActualHigh,ActualLow,ActualClose,ReturnPct,MFEPct,MAEPct,Outcome,DirectionCorrect
+LEGACY-1dd639324928b16c,2026-09-09,,BEML,B2,NO TRADE,59.136415765869344,80.32197876300334,0.8527602307548676,1.7102616257111272,100.0,2105.60009765625,2123.555817907798,,,,,,,,OPEN,
