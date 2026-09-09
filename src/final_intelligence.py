@@ -5,10 +5,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from .config import TRANSACTION_COST_BPS,SLIPPAGE_BPS,MIN_NET_RETURN_PCT,BENCHMARK_TOLERANCE_PCT,TARGET_HIT_LEVELS,TARGET_HIT_MIN_SAMPLES,EVALUATIONS_DIR,STOCK_RELIABILITY_FILE,DECISION_LEDGER_FILE
-HORIZONS=(1,3,5,7,10,20)
+HORIZONS=(1,3,5,7,10,20,60,90,180,365)
 def _num(v,d=50.0):
-    try:
-        x=float(v);return d if not np.isfinite(x) else x
+    try:x=float(v);return d if not np.isfinite(x) else x
     except Exception:return d
 def calibrate_confidence(confidence,empirical_accuracy=50.0,samples=0):
     c=np.clip(_num(confidence),0,100);a=np.clip(_num(empirical_accuracy),0,100);w=np.clip(_num(samples,0)/50,0,1);return float((1-w)*c+w*a)
@@ -46,7 +45,7 @@ def _stock_reliability(symbol):
     try:d=pd.read_csv(STOCK_RELIABILITY_FILE);r=d[d["Symbol"].astype(str)==str(symbol)].tail(1)
     except Exception:return 50.0,0
     if r.empty:return 50.0,0
-    m=_num(r.iloc[0].get("MAPE",5),5);a=_num(r.iloc[0].get("DirectionAccuracy",50),50);n=int(_num(r.iloc[0].get("Samples",0),0));return float(np.clip(.55*(100-min(m*15,100))+.45*a,0,100)),n
+    m=_num(r.iloc[0].get("RecentMAPE",r.iloc[0].get("MAPE",5)),5);a=_num(r.iloc[0].get("DirectionAccuracy",50),50);n=int(_num(r.iloc[0].get("Samples",0),0));return float(np.clip(.55*(100-min(m*15,100))+.45*a,0,100)),n
 def _horizon_reliability(symbol,horizon):
     path=EVALUATIONS_DIR/"horizon_evaluations.csv"
     if not path.exists():return 50.0,0
