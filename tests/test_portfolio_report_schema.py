@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from src.portfolio_report import OUTPUT_COLUMNS, _decision, portfolio_snapshot
+from src.portfolio_report import OUTPUT_COLUMNS, _decision, load_portfolio, portfolio_snapshot
 
 
 def test_portfolio_schema_is_stable():
@@ -11,6 +11,14 @@ def test_portfolio_schema_is_stable():
     assert "PnL" in df.columns
     assert "Return_Pct" in df.columns
     assert isinstance(summary, dict)
+
+
+def test_portfolio_input_accepts_missing_average_price():
+    df = load_portfolio()
+    assert "Ticker" in df.columns
+    assert "Quantity" in df.columns
+    assert len(df) >= 1
+    assert (df["Quantity"] > 0).all()
 
 
 def test_decision_never_requires_missing_columns():
