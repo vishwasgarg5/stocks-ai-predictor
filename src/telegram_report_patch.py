@@ -1,4 +1,4 @@
-"""Runtime hardening for Stage 10.5 reports and the morning horizon pipeline."""
+"""Runtime hardening for Stage 28 reports and the morning horizon pipeline."""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
@@ -17,7 +17,7 @@ def _status(row):
     for horizon in _ALL_HORIZONS:
         value=_tr._num(_tr._horizon_value(row,horizon))
         if value is not None:vals.append(value)
-    if not vals:return "-"
+    if not vals:return "N/A"
     ratio=sum(value>0 for value in vals)/len(vals)
     if ratio>=2/3:return "🟢 BULLISH"
     if ratio>=1/3:return "🟡 MIXED"
@@ -27,18 +27,21 @@ def _status(row):
 def _horizon_table(selected):
     if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK*","No multi-horizon predictions available."]
     ordered=_tr._sort(selected).head(10);rows=[]
-    for _,row in ordered.iterrows():rows.append([str(row.get("Symbol","-"))]+[_tr._pct(_tr._horizon_value(row,h)) for h in _SHORT_HORIZONS]+[_status(row)])
+    for _,row in ordered.iterrows():
+        rows.append([str(row.get("Symbol","-"))]+[_tr._pct(_tr._horizon_value(row,h)) for h in _SHORT_HORIZONS]+[_status(row)])
     short=[f"🔮 *MULTI-HORIZON OUTLOOK — TOP {len(rows)}*","Short-term expected return by trading-day horizon.",*_tr._table(["Stock","3D","7D","10D","20D","Status"],rows,max_width=13)]
     long_rows=[]
-    for _,row in ordered.iterrows():long_rows.append([str(row.get("Symbol","-"))]+[_tr._pct(_tr._horizon_value(row,h)) for h in _LONG_HORIZONS]+[_status(row)])
+    for _,row in ordered.iterrows():
+        long_rows.append([str(row.get("Symbol","-"))]+[_tr._pct(_tr._horizon_value(row,h)) for h in _LONG_HORIZONS]+[_status(row)])
     long=["🔭 *LONG-HORIZON OUTLOOK — 60D TO 365D*","Long-term expected return by trading-day horizon.",*_tr._table(["Stock","60D","90D","180D","365D","Status"],long_rows,max_width=13)]
     return short+["",*long]
 
 
 def _prediction_table(selected):
-    if selected is None or selected.empty:return []
-    rows=[[str(row.get("Symbol","-")),_tr._fmt(row.get("Pred_Open")),_tr._fmt(row.get("Pred_High")),_tr._fmt(row.get("Pred_Low")),_tr._fmt(row.get("Pred_Close"))] for _,row in _tr._sort(selected).head(5).iterrows()]
-    return [f"📈 *PREDICTED OHLC — TOP {len(rows)}*",*_tr._table(["Stock","Open","High","Low","Close"],rows)]
+    if selected is None or selected.empty:return ["📈 *PREDICTED OHLC — TOP 10*","No predictions available."]
+    ordered=_tr._sort(selected).head(10)
+    rows=[[str(row.get("Symbol","-")),_tr._fmt(row.get("Pred_Open")),_tr._fmt(row.get("Pred_High")),_tr._fmt(row.get("Pred_Low")),_tr._fmt(row.get("Pred_Close")),_tr._pct(row.get("Expected_Return"))] for _,row in ordered.iterrows()]
+    return [f"📈 *PREDICTED OHLC — TOP {len(rows)}*",*_tr._table(["Stock","Open","High","Low","Close","Exp%"],rows)]
 
 
 def _portfolio_status(row):
@@ -46,7 +49,7 @@ def _portfolio_status(row):
     for horizon in _ALL_HORIZONS:
         value=_tr._num(row.get(f"Horizon_{horizon}D"))
         if value is not None:vals.append(value)
-    if not vals:return str(row.get("Portfolio_Target_Status",row.get("Target_Status","-")))
+    if not vals:return str(row.get("Portfolio_Target_Status",row.get("Target_Status","N/A")))
     ratio=sum(value>0 for value in vals)/len(vals)
     if ratio>=2/3:return "🟢 BULLISH"
     if ratio>=1/3:return "🟡 MIXED"
@@ -90,13 +93,38 @@ _tr._portfolio_horizon_status=_portfolio_status
 _mr._attach_horizons=_attach_horizons_all
 _original_morning_report=_tr.morning_report
 
+
 def _clean_market_heading(text):
     marker="📊 *MARKET OVERVIEW*"
     if not isinstance(text,str):return text
     while text.count(marker)>1:text=text.replace(marker,"",1)
     return text
 
+
+def _action_summary(selected):
+    if selected is None or selected.empty:return "🎯 *ACTION SUMMARY*\nBUY 0 | HOLD 0 | AVG 0 | SELL 0 | WAIT 0 | NO TRADE 0"
+    counts={"BUY":0,"HOLD":0,"AVG":0,"SELL":0,"WAIT":0,"NO TRADE":0}
+    for value in selected.get("Action",pd.Series(dtype=object)):
+        d=_tr._decision(value)
+        if d in counts:counts[d]+=1
+        elif d in {"NO_TRADE","NOTRADE"}:counts["NO TRADE"]+=1
+    return ("🎯 *ACTION SUMMARY*\n"
+            f"BUY {counts['BUY']} | HOLD {counts['HOLD']} | AVG {counts['AVG']} | "
+            f"SELL {counts['SELL']} | WAIT {counts['WAIT']} | NO TRADE {counts['NO TRADE']}")
+
+
 def morning_report(*args,**kwargs):
-    return _clean_market_heading(_original_morning_report(*args,**kwargs))
+    text=_clean_market_heading(_original_morning_report(*args,**kwargs))
+    selected=kwargs.get("selected")
+    if selected is None and len(args)>=3:selected=args[2]
+    text=text.replace("QUALIFIED STOCKS BY PRICE BUCKET","PREDICTION SET BY PRICE BUCKET")
+    text=text.replace("Qualified Stocks:","Prediction Set:")
+    marker="🎯 *PREDICTION SET BY PRICE BUCKET*"
+    if marker in text:
+        text=text.replace(marker,_action_summary(selected)+"\n\n"+marker,1)
+    else:
+        text=_action_summary(selected)+"\n\n"+text
+    return text
+
 
 _tr.morning_report=morning_report
