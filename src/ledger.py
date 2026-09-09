@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 import hashlib
+import json
 import pandas as pd
 from .config import PREDICTIONS_DIR,EVALUATIONS_DIR,JUMP_DIR,INTRADAY_DIR,DAILY_METRICS_FILE,STOCK_RELIABILITY_FILE,MODEL_VERSION,STAGE_NAME,TRANSACTION_COST_BPS,SLIPPAGE_BPS,MAX_PER_PRICE_BUCKET,PREDICTION_TOP_N
 from .utils import write_json
@@ -53,8 +54,8 @@ def morning_report_sent(prediction_date):
     path=morning_report_path(prediction_date)
     if not path.exists():return False
     try:
-        data=pd.read_json(path,typ="series")
-        return bool(data.get("ReportSent") is True and data.get("DeliveryVersion")=="v2")
+        data=json.loads(path.read_text())
+        return data.get("ReportSent") is True and data.get("DeliveryVersion")=="v2"
     except Exception:return False
 
 def mark_morning_report_sent(prediction_date):
