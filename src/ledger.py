@@ -11,7 +11,6 @@ def jump_path(prediction_date): return JUMP_DIR / f"jump_{prediction_date}.csv"
 def intraday_path(prediction_date): return INTRADAY_DIR / f"intraday_{prediction_date}.csv"
 def morning_report_path(prediction_date): return PREDICTIONS_DIR / f"morning_report_{prediction_date}.json"
 def _prediction_id(run_date,symbol,cutoff_date,model_version): return "P"+hashlib.sha256(f"{run_date}|{symbol}|{cutoff_date}|{model_version}".encode()).hexdigest()[:16]
-
 def _baseline_columns(df,metadata=None):
     x=df.copy();meta=metadata or {};run_date=meta.get("PredictionDate",x.get("PredictionDate",pd.Series([""])).iloc[0] if len(x) else "");cutoff=meta.get("DataCutoff",x.get("DataCutoff",pd.Series([run_date])).iloc[0] if len(x) else run_date);version=meta.get("ModelVersion",MODEL_VERSION)
     if "Symbol" in x.columns:x["Prediction_ID"]=[_prediction_id(run_date,str(s),cutoff,version) for s in x["Symbol"].astype(str)]
@@ -22,26 +21,6 @@ def _baseline_columns(df,metadata=None):
     if baseline is not None:
         for target in ["Open","High","Low","Close"]:x[f"Baseline_{target}"]=baseline
         x["Baseline_Close"]=baseline;x["Baseline_Cost_Pct"]=(float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS))/100.0
-    return x
-
-def _normalize_prediction_ohlc(df):
-    """Make independently predicted OHLC legs structurally consistent.
-
-    The four regressors are independent, so they can occasionally produce an
-    impossible candle (e.g. predicted High below Open).  Preserve the model
-    outputs where possible and only enforce the mathematical OHLC envelope:
-    High >= max(Open, Close), Low <= min(Open, Close).  Non-finite predictions
-    remain invalid and are deliberately rejected by the ledger validator.
-    """
-    x=df.copy();cols=["Pred_Open","Pred_High","Pred_Low","Pred_Close"]
-    if any(c not in x.columns for c in cols):return x
-    for c in cols:x[c]=pd.to_numeric(x[c],errors="coerce")
-    for idx,r in x.iterrows():
-        o,h,l,c=[r[k] for k in cols]
-        if not all(pd.notna(v) and pd.api.types.is_number(v) for v in [o,h,l,c]):continue
-        if o<=0 or h<=0 or l<=0 or c<=0:continue
-        x.at[idx,"Pred_High"]=max(float(h),float(o),float(c))
-        x.at[idx,"Pred_Low"]=min(float(l),float(o),float(c))
     return x
 
 def _valid_prediction_ledger(df):
@@ -56,7 +35,6 @@ def _valid_prediction_ledger(df):
     for _,r in df.iterrows():
         try:
             o,h,l,c=[float(r[k]) for k in required]
-            if not all(pd.notna(v) and v>0 for v in [o,h,l,c]):return False
             if not (l<=min(o,c) and h>=max(o,c)):return False
         except Exception:return False
     if "PriceBucket" in df.columns:
@@ -86,10 +64,10 @@ def save_predictions(df,prediction_date,metadata=None):
                 return path
         except ValueError:raise
         except Exception as exc:raise ValueError(f"Existing prediction ledger unreadable: {exc}")
-    enriched=_normalize_prediction_ohlc(_baseline_columns(df,metadata))
+    enriched=_baseline_columns(df,metadata)
     if not _valid_prediction_ledger(enriched):raise ValueError("Prediction ledger failed identity/OHLC/selection integrity validation")
     path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(".tmp");enriched.to_csv(tmp,index=False);tmp.replace(path)
-    metadata["PredictionLedgerVersion"]="v9";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();metadata["SelectionIntegrity"]={"MaxStocks":int(PREDICTION_TOP_N),"MaxPerPriceBucket":int(MAX_PER_PRICE_BUCKET),"OHLCEnvelopeNormalized":True};write_json(path.with_suffix(".json"),metadata);return path
+    metadata["PredictionLedgerVersion"]="v8";metadata["PredictionLedgerKey"]="Prediction_ID";metadata["Baseline"]="Previous_Close";metadata["BaselineCostBps"]=float(TRANSACTION_COST_BPS)+float(SLIPPAGE_BPS);metadata["PredictionIDs"]=enriched["Prediction_ID"].astype(str).tolist();metadata["SelectionIntegrity"]={"MaxStocks":int(PREDICTION_TOP_N),"MaxPerPriceBucket":int(MAX_PER_PRICE_BUCKET)};write_json(path.with_suffix(".json"),metadata);return path
 
 def load_predictions(prediction_date):
     path=prediction_path(prediction_date)
