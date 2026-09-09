@@ -50,6 +50,21 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.morning_runner
 
+      - name: Verify Telegram delivery marker
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from src.utils import today_ist
+          p=Path(f"data/stage2/predictions/morning_report_{today_ist()}.json")
+          if not p.exists():
+              raise SystemExit("Telegram delivery marker missing")
+          d=json.loads(p.read_text())
+          if d.get("ReportSent") is not True or d.get("DeliveryVersion") != "v2":
+              raise SystemExit(f"Telegram delivery not confirmed: {d}")
+          print("Telegram delivery confirmed")
+          PY
+
       - name: Commit generated state
         run: |
           git config user.name "stocks-ai-predictor"
