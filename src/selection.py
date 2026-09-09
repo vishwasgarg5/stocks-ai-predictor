@@ -8,7 +8,7 @@ def load_reliability():
     try:
         df=pd.read_csv(STOCK_RELIABILITY_FILE);out={}
         for _,r in df.iterrows():
-            mape=float(r.get("MAPE",3) or 3);direction=float(r.get("DirectionAccuracy",50) or 50);samples=float(r.get("Samples",0) or 0);evidence=min(samples/20.0,1.0);raw=0.55*clamp(100-mape*20)+0.45*direction;out[str(r["Symbol"])]=50+evidence*(raw-50)
+            mape=float(r.get("RecentMAPE",r.get("MAPE",3)) or 3);direction=float(r.get("DirectionAccuracy",50) or 50);samples=float(r.get("Samples",0) or 0);evidence=min(samples/20.0,1.0);raw=0.55*clamp(100-mape*20)+0.45*direction;out[str(r["Symbol"])]=50+evidence*(raw-50)
         return out
     except Exception:return {}
 def expected_return_score(v):return clamp(50+float(v)*5)
@@ -50,8 +50,7 @@ def _bucket_cap(df,max_per_bucket):
     if df.empty:return df
     pieces=[]
     for bucket,group in df.groupby("PriceBucket",sort=False):
-        g=group.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
-        limit=len(g) if max_per_bucket is None or max_per_bucket<=0 else min(len(g),int(max_per_bucket));pieces.append(g.head(limit))
+        g=group.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False);limit=len(g) if max_per_bucket is None or max_per_bucket<=0 else min(len(g),int(max_per_bucket));pieces.append(g.head(limit))
     return pd.concat(pieces,ignore_index=True) if pieces else df.iloc[0:0]
 def score_candidates(candidates,regime="SIDEWAYS"):
     if candidates is None or candidates.empty:return pd.DataFrame()
@@ -64,16 +63,15 @@ def score_candidates(candidates,regime="SIDEWAYS"):
 def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False):
     scored=score_candidates(candidates,regime)
     if scored.empty:return scored
-    base=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=60.0)].copy()
-    strict=_apply_uncertainty_cap(_strict_trade_eligible(base))
+    base=scored[(scored["Score"]>=min_score)&(scored["Confidence"]>=min_confidence)&(scored["TradeConfidence"]>=min_trade_confidence)&(scored["DirectionReturnAlignment"]>=60.0)].copy();strict=_apply_uncertainty_cap(_strict_trade_eligible(base));fallback_mode=False
     if strict.empty:strict=_apply_uncertainty_cap(base[base["Direction"].astype(str).str.upper().eq("UP")])
     if strict.empty:strict=base[base["Direction"].astype(str).str.upper().eq("UP")].copy()
     if strict.empty:
-        # A valid model run must still produce a deterministic prediction ledger.
-        # Relax recommendation eligibility only as a final selection fallback;
-        # the ledger continues to enforce identity, OHLC and bucket integrity.
-        strict=_apply_uncertainty_cap(scored.copy())
-    if strict.empty:strict=scored.copy()
+        # Preserve a deterministic prediction ledger even when no recommendation passes.
+        # These rows are explicitly prediction-only; downstream final_action still guards BUY.
+        strict=_apply_uncertainty_cap(scored.copy());fallback_mode=True
+    if strict.empty:strict=scored.copy();fallback_mode=True
+    strict["SelectionTier"]="PREDICTION_ONLY" if fallback_mode else "RECOMMENDED"
     capped=_bucket_cap(strict,max_per_bucket)
     if bucket_only:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     n=None if top_n is None else int(top_n)
@@ -83,6 +81,5 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
         if not group.empty:seeded.append(group.iloc[0])
     chosen=pd.DataFrame(seeded).drop_duplicates("Symbol") if seeded else capped.iloc[0:0]
     if len(chosen)<n:
-        remaining=capped[~capped["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
-        chosen=pd.concat([chosen,remaining.head(n-len(chosen))],ignore_index=True)
+        remaining=capped[~capped["Symbol"].isin(chosen["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False);chosen=pd.concat([chosen,remaining.head(n-len(chosen))],ignore_index=True)
     return chosen.drop_duplicates("Symbol").head(n).sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
