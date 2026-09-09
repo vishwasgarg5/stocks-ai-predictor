@@ -1,5 +1,7 @@
 """Runtime hardening for Stage 28 reports and the morning horizon pipeline."""
 from __future__ import annotations
+import json
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from . import telegram_report as _tr
@@ -99,7 +101,7 @@ def _action_summary(selected):
         d=_tr._decision(value)
         if d in counts:counts[d]+=1
         elif d in {"NO_TRADE","NOTRADE"}:counts["NO TRADE"]+=1
-    return ("🎯 *ACTION SUMMARY*\n"+f"BUY {counts['BUY']} | HOLD {counts['HOLD']} | AVG {counts['AVG']} | SELL {counts['SELL']} | WAIT {counts['WAIT']} | NO TRADE {counts['NO TRADE']}")
+    return "🎯 *ACTION SUMMARY*\n"+f"BUY {counts['BUY']} | HOLD {counts['HOLD']} | AVG {counts['AVG']} | SELL {counts['SELL']} | WAIT {counts['WAIT']} | NO TRADE {counts['NO TRADE']}"
 
 def morning_report(*args,**kwargs):
     text=_clean_market_heading(_original_morning_report(*args,**kwargs));selected=kwargs.get("selected")
@@ -109,3 +111,21 @@ def morning_report(*args,**kwargs):
     return text.replace(marker,_action_summary(selected)+"\n\n"+marker,1) if marker in text else _action_summary(selected)+"\n\n"+text
 
 _tr.morning_report=morning_report
+
+# Old runs only stored ReportSent=true, which could suppress a retry even when
+# the user never received the message. Require a versioned delivery marker.
+def _delivery_path(prediction_date):
+    return Path(f"data/stage2/predictions/morning_report_{prediction_date}.json")
+
+def _delivery_sent(prediction_date):
+    p=_delivery_path(prediction_date)
+    try:
+        d=json.loads(p.read_text()) if p.exists() else {}
+        return d.get("ReportSent") is True and d.get("DeliveryVersion")=="v2"
+    except Exception:return False
+
+def _mark_delivery(prediction_date):
+    p=_delivery_path(prediction_date);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps({"PredictionDate":str(prediction_date),"ReportSent":True,"DeliveryVersion":"v2"},indent=2))
+
+_mr.morning_report_sent=_delivery_sent
+_mr.mark_morning_report_sent=_mark_delivery
