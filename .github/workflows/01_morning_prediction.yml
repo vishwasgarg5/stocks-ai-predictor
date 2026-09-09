@@ -39,7 +39,7 @@ jobs:
         run: python -m compileall -q src
 
       - name: Contract tests
-        run: python -m pytest -q tests/test_stage28_contract.py tests/test_prediction_lineage.py tests/test_data_snapshot.py tests/test_report_integrity.py tests/test_portfolio_stage28_hardening.py tests/test_report_metrics_quality.py
+        run: python -m pytest -q tests/test_stage28_contract.py tests/test_prediction_lineage.py tests/test_data_snapshot.py tests/test_report_integrity.py tests/test_portfolio_stage28_hardening.py tests/test_report_metrics_quality.py tests/test_package_startup.py
 
       - name: Market data quality gate
         run: python -m src.live_quality_gate morning
