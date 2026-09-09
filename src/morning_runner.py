@@ -111,7 +111,15 @@ def _portfolio_payload():
         df,s=portfolio_snapshot();s=dict(s);s["Rows"]=[];s["SellAlerts"]=[];s["AveragePlans"]=[]
         if not df.empty:
             for _,r in df.sort_values("PnL").iterrows():
-                item={"Stock":r.Stock,"Quantity":int(r.Quantity),"Average_Price":"-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}","Current_Price":"-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}","Return_Pct":"-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%","AI_Target":"-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}","Decision":str(r.get("Decision","WAIT / DATA UNAVAILABLE")),"Sell_Window":str(r.get("Sell_Window","-")),"Profit_Target":"-" if pd.isna(r.get("Profit_Target_Price")) else f"₹{float(r.Profit_Target_Price):,.2f}","Recommended_Qty":int(r.get("Recommended_Qty",0) or 0),"New_Average_Price":"-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}","Reason":str(r.get("Sell_Reason","-"))};s["Rows"].append(item)
+                item={"Stock":r.Stock,"Quantity":int(r.Quantity),"Average_Price":"-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}","Current_Price":"-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}","Return_Pct":"-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%","AI_Target":"-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}","Decision":str(r.get("Decision","WAIT / DATA UNAVAILABLE")),"Sell_Window":str(r.get("Sell_Window","-")),"Profit_Target":"-" if pd.isna(r.get("Profit_Target_Price")) else f"₹{float(r.Profit_Target_Price):,.2f}","Recommended_Qty":int(r.get("Recommended_Qty",0) or 0),"New_Average_Price":"-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}","Reason":str(r.get("Sell_Reason","-"))}
+                for h in HORIZONS:
+                    value=r.get(f"Horizon_{h}D",np.nan)
+                    item[f"Horizon_{h}D"]="-" if pd.isna(value) else f"{float(value):+.1f}%"
+                item["Horizon"]="-"
+                horizon_values=[(h,float(r.get(f"Horizon_{h}D"))) for h in HORIZONS if pd.notna(r.get(f"Horizon_{h}D",np.nan)) and float(r.get(f"Horizon_{h}D"))>=10]
+                if horizon_values:
+                    h,v=max(horizon_values,key=lambda x:(x[1],-x[0]));item["Horizon"]=f"{h}D";item["Sell_Window"]=str(r.get("Sell_Window", "-"))
+                s["Rows"].append(item)
                 if item["Decision"].startswith("SELL") or item["Decision"]=="SELL / PROFIT BOOK":s["SellAlerts"].append(item)
                 if item["Decision"]=="AVG":s["AveragePlans"].append(item)
         else:s["Rows"].append("Portfolio data unavailable")
@@ -165,5 +173,6 @@ def run():
     if not intraday.empty:save_intraday_predictions(intraday,prediction_date)
     try:ipo=get_ipo_report();ipo.to_csv(IPO_METRICS_FILE,index=False) if not ipo.empty else None
     except Exception as exc:print(f"IPO intelligence skipped: {exc}");ipo=pd.DataFrame()
-    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,accuracy=model_report_metrics(),scan={"Universe":scan_count,"Data":len(raw_data),"Liquid":len(data_map),"AI":len(prediction_symbols),"Selected":len(selected)},portfolio=_portfolio_payload(),regime=regime,market_snapshot=snapshot,ipo=ipo);send_telegram(report);mark_morning_report_sent(prediction_date)
+    report=morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,accuracy=model_report_metrics(),scan={"Universe":scan_count,"Data":len(raw_data),"Liquid":len(data_map),"AI":len(prediction_symbols),"Selected":len(selected)},portfolio=_portfolio_payload(),regime=regime,market_snapshot=snapshot,ipo=ipo);sent=send_telegram(report)
+    if sent:mark_morning_report_sent(prediction_date)
 if __name__=="__main__":run()
