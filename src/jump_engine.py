@@ -29,19 +29,18 @@ def generate_jump_watchlist(data_map,cutoff_date,variant="A"):
             predictions={t:float(result[f"Pred_{t}"]) for t in ["Open","High","Low","Close","Volume"]}
             hb=train_horizon_models(df,cutoff_date);horizons=predict_horizons(df,hb,cutoff_date)
             h7=horizons[horizons["HorizonDays"]==JUMP_HORIZON_DAYS]
-            true_7d_return=float(h7.iloc[0]["Expected_Return"]) if not h7.empty else 0.0
-            confidence=float(bundle.get("direction_validation_accuracy",50))
+            true_7d_return=float(h7.iloc[0]["Expected_Return"]) if not h7.empty and pd.notna(h7.iloc[0]["Expected_Return"]) else 0.0
+            historical_direction_accuracy=float(bundle.get("direction_validation_accuracy",50))
             expected_high=predictions["High"]/current-1;expected_close=predictions["Close"]/current-1
             max_potential=max(expected_high,true_7d_return/100)
-            probability=float(np.clip(50+max_potential*250+(confidence-50)*0.35,0,95))
-            score=calculate_jump_score(current,predictions["Close"],predictions["High"],probability,tech,true_7d_return)
-            # A jump candidate needs either a meaningful 1D high move or a meaningful 7D upside.
-            if probability<MIN_JUMP_PROBABILITY:continue
+            jump_signal_score=calculate_jump_score(current,predictions["Close"],predictions["High"],historical_direction_accuracy,tech,true_7d_return)
+            # This is a heuristic signal score, not a calibrated probability.
+            if jump_signal_score<MIN_JUMP_PROBABILITY:continue
             if max(expected_high*100,true_7d_return)<3.0:continue
-            candidates.append({"Symbol":symbol,"Current_Price":current,"Predicted_Close_1D":predictions["Close"],"Predicted_High_1D":predictions["High"],"Expected_1D_Return":expected_close*100,"Estimated_7D_Upside":true_7d_return,"Jump_Probability":probability,"Confidence":confidence,"TechnicalScore":tech,"JumpScore":score,"Target_Level":current*(1+JUMP_THRESHOLD),"Status":"OPEN","Remaining_Days":JUMP_HORIZON_DAYS})
+            candidates.append({"Symbol":symbol,"Current_Price":current,"Predicted_Close_1D":predictions["Close"],"Predicted_High_1D":predictions["High"],"Expected_1D_Return":expected_close*100,"Estimated_7D_Upside":true_7d_return,"JumpSignalScore":jump_signal_score,"JumpProbability":np.nan,"Confidence":historical_direction_accuracy,"TechnicalScore":tech,"JumpScore":jump_signal_score,"Target_Level":current*(1+JUMP_THRESHOLD),"Status":"OPEN","Remaining_Days":JUMP_HORIZON_DAYS})
         except Exception as exc:print(f"{symbol}: jump prediction failed: {exc}")
     if not candidates:return pd.DataFrame()
-    return pd.DataFrame(candidates).sort_values(["JumpScore","Jump_Probability","Estimated_7D_Upside"],ascending=False).head(JUMP_TOP_N).reset_index(drop=True)
+    return pd.DataFrame(candidates).sort_values(["JumpScore","JumpSignalScore","Estimated_7D_Upside"],ascending=False).head(JUMP_TOP_N).reset_index(drop=True)
 
 
 def evaluate_jump_prediction(prediction_row,actual_history):
