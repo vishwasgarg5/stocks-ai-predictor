@@ -1,8 +1,8 @@
 """Telegram report builders for Stage 28."""
 import html, math, os, re, requests
+import numpy as np
 import pandas as pd
 from .config import TELEGRAM_MAX_LENGTH, MODEL_VERSION
-from .ledger import load_predictions
 
 _SECTION="\n§§TELEGRAM_SECTION§§\n"
 _BUCKET_ORDER=["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
@@ -45,8 +45,7 @@ def _split_safe(text,max_length):
     return [x for x in parts if x]
 
 def _report_messages(text):
-    parts=[p.strip() for p in text.split(_SECTION) if p.strip()]
-    groups=[];current=[];boundaries={"BEST PICK","JUMP WATCH","MODEL LEARNING","AI PORTFOLIO MANAGER","IPO INTELLIGENCE","MULTI-HORIZON"}
+    parts=[p.strip() for p in text.split(_SECTION) if p.strip()];groups=[];current=[];boundaries={"BEST PICK","JUMP WATCH","MODEL LEARNING","AI PORTFOLIO MANAGER","IPO INTELLIGENCE","MULTI-HORIZON"}
     for part in parts:
         current.append(part)
         if any(x in part.upper() for x in boundaries):groups.append("\n\n".join(current));current=[]
@@ -148,9 +147,7 @@ def _status_from_values(vals):
     vals=[v for v in vals if v is not None and np.isfinite(v)] if vals else []
     if len(vals)<3:return "N/A"
     ratio=sum(v>0 for v in vals)/len(vals)
-    if ratio>=2/3:return "🟢 BULLISH"
-    if ratio>=1/3:return "🟡 MIXED"
-    return "🔴 WEAK"
+    return "🟢 BULLISH" if ratio>=2/3 else "🟡 MIXED" if ratio>=1/3 else "🔴 WEAK"
 
 def _horizon_status(r):return _status_from_values([_num(_horizon_value(r,h)) for h in REPORT_HORIZONS])
 def _horizon_table(selected):
@@ -181,7 +178,12 @@ def _ipo(x):
     for _,r in x.head(5).iterrows():rows.append([r.get("IPOName","-"),r.get("Status",r.get("IPOStatus","-")),f"₹{_fmt(r.get('PriceHigh',0),0)}",f"₹{_fmt(r.get('GMPValue',0),0)}",_pct(r.get("GMPPct",0)),_decision(r.get("IPOAction","WATCH"))])
     return ["🏦 *IPO INTELLIGENCE — TOP 5*",*_table(["IPO","Status","Price","GMP","GMP%","AI View"],rows,max_width=14)]
 
-def _portfolio_horizon_status(x):return _status_from_values([_num(x.get(f"Horizon_{h}D")) for h in REPORT_HORIZONS]) if sum(_num(x.get(f"Horizon_{h}D")) is not None for h in REPORT_HORIZONS)>=3 else ("TARGET +" if _num(x.get("AI_Target")) is not None and _num(x.get("Current_Price")) is not None and _num(x.get("AI_Target"))>_num(x.get("Current_Price")) else "TARGET -" if _num(x.get("AI_Target")) is not None and _num(x.get("Current_Price")) is not None else "N/A")
+def _portfolio_horizon_status(x):
+    vals=[_num(x.get(f"Horizon_{h}D")) for h in REPORT_HORIZONS];valid=[v for v in vals if v is not None]
+    if len(valid)>=3:return _status_from_values(valid)
+    ai,cp=_num(x.get("AI_Target")),_num(x.get("Current_Price"))
+    if ai is not None and cp not in (None,0):return "TARGET +" if ai>cp else "TARGET -"
+    return "N/A"
 
 def _portfolio(p):
     lines=["💼 *AI PORTFOLIO MANAGER*","All configured holdings are shown; missing AI data is explicit."]
@@ -197,16 +199,19 @@ def _evaluation_sections(evaluation):
     lines=["📊 *PREDICTION vs ACTUAL*"]
     for _,r in evaluation.iterrows():
         rows=[]
-        for kind,prefix in (("Predicted","Pred_"),("Actual","Actual_")):
-            rows.append([kind,*[_fmt(r.get(f"{prefix}{f}")) for f in ("Open","High","Low","Close")]])
+        for kind,prefix in (("Predicted","Pred_"),("Actual","Actual_")):rows.append([kind,*[_fmt(r.get(f"{prefix}{f}")) for f in ("Open","High","Low","Close")]])
         diffs=[]
         for f in ("Open","High","Low","Close"):
-            d=_num(r.get(f"Diff_{f}"));a=_num(r.get(f"Actual_{f}"));diffs.append(_pct(d/a*100 if d is not None and a else d))
+            d,a=_num(r.get(f"Diff_{f}")),_num(r.get(f"Actual_{f}"));diffs.append(_pct(d/a*100 if d is not None and a else d))
         rows.append(["Difference%",*diffs]);lines += [f"💎 *{r.get('Symbol',r.get('Stock','-'))}*",*_table(["Type","Open","High","Low","Close"],rows)]
     return lines
 
 def evening_report(market_date,evaluation,metrics,retraining,**kwargs):
-    metrics,retraining=metrics or {},retraining or {};scan=kwargs.get("scan",{}) or {};portfolio=kwargs.get("portfolio",{}) or {};lines=[f"🌙 *AI NSE EVENING REPORT*\n📅 {market_date}\n⚙️ {MODEL_VERSION}",_SECTION,*_evaluation_sections(evaluation),_SECTION,"📈 *MODEL ACCURACY*",f"Samples: {int(_num(metrics.get('Samples'),0) or 0)} | Overall MAPE: {_accuracy(metrics.get('OverallMAPE'))} | Close MAPE: {_accuracy(metrics.get('CloseMAPE'))}",f"Direction accuracy: {_accuracy(metrics.get('DirectionAccuracy'))}",f"Scanned: {int(_num(scan.get('Universe'),0) or 0):,}",_SECTION,"🧠 *MODEL LEARNING*",f"Retrained: {'YES' if retraining.get('Retrained',False) else 'NO'} | Decision: {retraining.get('Decision','-')}",_SECTION,*_portfolio(portfolio)];return "\n".join(lines)
+    metrics,retraining=metrics or {},retraining or {};scan=kwargs.get("scan",{}) or {};portfolio=kwargs.get("portfolio",{}) or {}
+    lines=[f"🌙 *AI NSE EVENING REPORT*\n📅 {market_date}\n⚙️ {MODEL_VERSION}",_SECTION,*_evaluation_sections(evaluation),_SECTION,"📈 *MODEL ACCURACY*",f"Samples: {int(_num(metrics.get('Samples'),0) or 0)} | Overall MAPE: {_accuracy(metrics.get('OverallMAPE'))} | Close MAPE: {_accuracy(metrics.get('CloseMAPE'))}",f"Direction accuracy: {_accuracy(metrics.get('DirectionAccuracy'))}",f"Scanned: {int(_num(scan.get('Universe'),0) or 0):,}",_SECTION,"🧠 *MODEL LEARNING*",f"Retrained: {'YES' if retraining.get('Retrained',False) else 'NO'} | Decision: {retraining.get('Decision','-')}",_SECTION,*_portfolio(portfolio)]
+    return "\n".join(lines)
 
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
-    accuracy,scan=kwargs.get("accuracy",{}),kwargs.get("scan",{});portfolio,ipo=kwargs.get("portfolio",{}),kwargs.get("ipo",pd.DataFrame());lines=[f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}",_SECTION,f"📊 *MARKET OVERVIEW*",f"Accuracy: PENDING EVENING EVALUATION | Samples 0" if int(_num(accuracy.get('AccuracySamples',accuracy.get('Samples',0)),0) or 0)==0 else f"Accuracy: {_accuracy(accuracy.get('CurrentAccuracy'))}",f"Scanned: {int(_num(scan.get('Universe'),0) or 0):,}",_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(ipo),_SECTION,*_portfolio(portfolio)];return "\n".join(lines)
+    accuracy,scan=kwargs.get("accuracy",{}),kwargs.get("scan",{});portfolio,ipo=kwargs.get("portfolio",{}),kwargs.get("ipo",pd.DataFrame());pending=int(_num(accuracy.get('AccuracySamples',accuracy.get('Samples',0)),0) or 0)==0
+    lines=[f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}",_SECTION,"📊 *MARKET OVERVIEW*",f"Accuracy: {'PENDING EVENING EVALUATION | Samples 0' if pending else _accuracy(accuracy.get('CurrentAccuracy'))}",f"Scanned: {int(_num(scan.get('Universe'),0) or 0):,}",_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(ipo),_SECTION,*_portfolio(portfolio)]
+    return "\n".join(lines)
