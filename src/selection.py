@@ -68,6 +68,12 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     strict=_apply_uncertainty_cap(_strict_trade_eligible(base))
     if strict.empty:strict=_apply_uncertainty_cap(base[base["Direction"].astype(str).str.upper().eq("UP")])
     if strict.empty:strict=base[base["Direction"].astype(str).str.upper().eq("UP")].copy()
+    if strict.empty:
+        # A valid model run must still produce a deterministic prediction ledger.
+        # Relax recommendation eligibility only as a final selection fallback;
+        # the ledger continues to enforce identity, OHLC and bucket integrity.
+        strict=_apply_uncertainty_cap(scored.copy())
+    if strict.empty:strict=scored.copy()
     capped=_bucket_cap(strict,max_per_bucket)
     if bucket_only:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     n=None if top_n is None else int(top_n)
