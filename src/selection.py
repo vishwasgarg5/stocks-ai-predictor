@@ -1,4 +1,4 @@
-"""Stage 28 precision selection with strict eligibility, bucket caps and deterministic fallback."""
+"""Stage 28 precision selection with strict trade eligibility and deterministic prediction-set fallback."""
 import pandas as pd
 from .config import STOCK_RELIABILITY_FILE,MAX_PREDICTION_UNCERTAINTY,TOP_N,MAX_PER_PRICE_BUCKET,MIN_NET_RETURN_PCT
 from .utils import clamp
@@ -60,6 +60,29 @@ def score_candidates(candidates,regime="SIDEWAYS"):
         if c not in df.columns:df[c]=v
     reliability=load_reliability();df["ReliabilityScore"]=df["Symbol"].map(reliability).fillna(50.0);df["TradeConfidence"]=df.apply(calculate_trade_confidence,axis=1);df["TradeQuality"]=df["TradeConfidence"].map(lambda x:"HIGH" if x>=75 else "MEDIUM" if x>=60 else "LOW");df["DirectionReturnAlignment"]=df.apply(lambda r:direction_return_alignment(r.get("Direction","NEUTRAL"),r.get("Expected_Return",0)),axis=1);df["Score"]=df.apply(lambda r:calculate_score(r,regime),axis=1)
     return df.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence","SectorScore"],ascending=False).reset_index(drop=True)
+def select_prediction_set(candidates,top_n=TOP_N,max_per_bucket=MAX_PER_PRICE_BUCKET):
+    """Select the prediction ledger independently of BUY/TRADE eligibility.
+
+    Prediction coverage must not collapse merely because a bearish market or
+    strict trade filter leaves few actionable names. Only finite OHLC rows,
+    valid price buckets, uncertainty limits and the hard bucket cap apply here.
+    """
+    scored=score_candidates(candidates)
+    if scored.empty:return scored
+    pool=scored.copy()
+    required=["Pred_Open","Pred_High","Pred_Low","Pred_Close","Current_Price"]
+    for c in required:pool=pool[pd.to_numeric(pool.get(c),errors="coerce").notna()]
+    pool=pool[pool["PriceBucket"].astype(str).ne("OUT")]
+    capped=_bucket_cap(pool,max_per_bucket)
+    if capped.empty:return capped
+    ranked=capped.sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
+    n=int(top_n) if top_n is not None and int(top_n)>0 else len(ranked)
+    # Seed each represented bucket, then fill remaining slots globally.
+    seeded=[g.iloc[0] for _,g in ranked.groupby("PriceBucket",sort=False) if not g.empty]
+    chosen=pd.DataFrame(seeded).drop_duplicates("Symbol") if seeded else ranked.iloc[0:0]
+    if len(chosen)<n:
+        remaining=ranked[~ranked["Symbol"].isin(chosen["Symbol"])].head(n-len(chosen));chosen=pd.concat([chosen,remaining],ignore_index=True)
+    chosen=chosen.drop_duplicates("Symbol").head(n).copy();chosen["SelectionTier"]="PREDICTION_ONLY";return chosen.reset_index(drop=True)
 def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False):
     scored=score_candidates(candidates,regime)
     if scored.empty:return scored
@@ -70,11 +93,7 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
         strict=_apply_uncertainty_cap(scored.copy());fallback_mode=True
     if strict.empty:strict=scored.copy();fallback_mode=True
     strict["SelectionTier"]="PREDICTION_ONLY" if fallback_mode else "RECOMMENDED"
-    # The ledger is a prediction set, not the BUY list. Fill from the full
-    # scored pool when strict recommendations are too sparse, while preserving
-    # the hard maximum of six rows per price bucket.
-    capped=_bucket_cap(strict,max_per_bucket)
-    n=None if top_n is None else int(top_n)
+    capped=_bucket_cap(strict,max_per_bucket);n=None if top_n is None else int(top_n)
     if n is None or n<=0:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     if len(capped)<n:
         pool=_bucket_cap(_apply_uncertainty_cap(scored.copy()),max_per_bucket)
