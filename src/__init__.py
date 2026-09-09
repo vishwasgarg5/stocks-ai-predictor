@@ -14,3 +14,18 @@ try:
     from . import runtime_hardening as _runtime_hardening
 except Exception:
     _runtime_hardening = None
+
+# The morning runner imports these ledger functions directly, so patch both
+# the ledger module and the already-imported morning_runner bindings. An old
+# ReportSent=true marker without DeliveryVersion=v2 must never suppress a
+# Telegram retry.
+if _telegram_report_patch is not None:
+    try:
+        from . import ledger as _ledger
+        from . import morning_runner as _morning_runner
+        _ledger.morning_report_sent = _telegram_report_patch._delivery_sent
+        _ledger.mark_morning_report_sent = _telegram_report_patch._mark_delivery
+        _morning_runner.morning_report_sent = _telegram_report_patch._delivery_sent
+        _morning_runner.mark_morning_report_sent = _telegram_report_patch._mark_delivery
+    except Exception:
+        pass
