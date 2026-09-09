@@ -32,9 +32,13 @@ def get_feature_columns():return ["Open","High","Low","Close","Volume","SMA10","
 def prepare_supervised(df,cutoff_date=None):
     x=build_features(df)
     if x.empty:return pd.DataFrame()
-    if cutoff_date is not None:x=x[x.index<=pd.Timestamp(cutoff_date)]
+    # Labels are constructed first. Training rows are then restricted to dates
+    # strictly before the prediction cutoff, so the cutoff day's next-session
+    # label can never leak into training.
     for target in ["Open","High","Low","Close","Volume"]:x[f"Target_{target}"]=x[target].shift(-1)
     future_return=x["Target_Close"]/x["Close"]-1;x["Target_Return"]=future_return;x["Direction"]=np.select([future_return>0.002,future_return<-0.002],[2,0],default=1)
+    if cutoff_date is not None:
+        cutoff=pd.Timestamp(cutoff_date).normalize();x=x[x.index.normalize()<cutoff]
     columns=get_feature_columns()+["Target_Open","Target_High","Target_Low","Target_Close","Target_Volume","Target_Return","Direction"]
     return x[columns].replace([np.inf,-np.inf],np.nan).dropna()
 
@@ -44,13 +48,7 @@ def leakage_audit(df,cutoff_date=None,horizon=1):
         x=build_features(df)
         if x.empty:return {"Status":"FAIL","Rows":0,"Reason":"No feature data"}
         if cutoff_date is None:return {"Status":"PASS","Rows":len(x),"Features":len(get_feature_columns()),"FutureRows":0,"TargetLeakRows":0,"Horizon":int(horizon)}
-        cutoff=pd.Timestamp(cutoff_date)
-        feature_count=int((x.index>cutoff).sum())
-        target_dates=pd.Series(x.index,index=x.index).shift(-int(horizon))
-        target_count=int(((target_dates>cutoff)&target_dates.notna()).sum())
-        cols=[c for c in get_feature_columns() if c in x.columns]
-        passed=(feature_count==0 and target_count==0 and len(cols)==len(get_feature_columns()))
-        return {"Status":"PASS" if passed else "FAIL","Rows":len(x),"Features":len(cols),"FutureRows":feature_count,"TargetLeakRows":target_count,"Horizon":int(horizon)}
+        cutoff=pd.Timestamp(cutoff_date).normalize();idx=pd.DatetimeIndex(x.index).normalize();feature_count=int((idx>=cutoff).sum());target_dates=pd.Series(idx,index=x.index).shift(-int(horizon));target_count=int(((target_dates>=cutoff)&target_dates.notna()).sum());cols=[c for c in get_feature_columns() if c in x.columns];passed=(feature_count==0 and target_count==0 and len(cols)==len(get_feature_columns()));return {"Status":"PASS" if passed else "FAIL","Rows":len(x),"Features":len(cols),"FutureRows":feature_count,"TargetLeakRows":target_count,"Horizon":int(horizon)}
     except Exception as exc:return {"Status":"FAIL","Rows":0,"Reason":str(exc)}
 
 def technical_score(df):
