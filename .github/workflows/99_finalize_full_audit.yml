@@ -1,6 +1,8 @@
 name: Finalize Full Repository Audit
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,26 +14,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+        with: {fetch-depth: 0}
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
+        with: {python-version: '3.11'}
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Repair canonical portfolio contract
         run: |
           python - <<'PY'
           from pathlib import Path
-          p=Path('src/portfolio_report.py')
-          s=p.read_text()
+          p=Path('src/portfolio_report.py'); s=p.read_text()
           if 'def _sell_plan(' not in s:
-              s += '''\n\n# Regression-compatible dynamic sell-plan helper.\ndef _sell_plan(row, current_price, average_price, cutoff_date):\n    current=float(current_price); avg=float(average_price)\n    minimum=float(TARGET_PROFIT_PCT)\n    confidence=_num(row, "AI_Confidence", 0.0)\n    candidates=[]\n    for h in HORIZONS:\n        value=_num(row, f"Horizon_{h}D")\n        if np.isfinite(value):\n            candidates.append((h, float(value)))\n    qualifying=[item for item in candidates if item[1] >= minimum]\n    if not qualifying:\n        return minimum, avg*(1+minimum/100.0), "WAIT", "-", "WAIT"\n    best=max(qualifying, key=lambda item: (item[1], -item[0]))\n    profit=float(best[1]) if confidence >= MIN_AI_CONFIDENCE else minimum\n    price=avg*(1+profit/100.0)\n    return profit, price, f"{best[0]}D TARGET", _next_trading_date(cutoff_date, best[0]), "TARGET_DATE"\n'''
+              s += '''\n\n# Regression-compatible dynamic sell-plan helper.\ndef _sell_plan(row, current_price, average_price, cutoff_date):\n    current=float(current_price); avg=float(average_price); minimum=float(TARGET_PROFIT_PCT)\n    confidence=_num(row, "AI_Confidence", 0.0)\n    candidates=[(h,_num(row,f"Horizon_{h}D")) for h in HORIZONS]\n    qualifying=[(h,float(v)) for h,v in candidates if np.isfinite(v) and float(v)>=minimum]\n    if not qualifying:return minimum,avg*(1+minimum/100.0),"WAIT","-","WAIT"\n    best=max(qualifying,key=lambda x:(x[1],-x[0])); profit=float(best[1]) if confidence>=MIN_AI_CONFIDENCE else minimum\n    return profit,avg*(1+profit/100.0),f"{best[0]}D TARGET",_next_trading_date(cutoff_date,best[0]),"TARGET_DATE"\n'''
               p.write_text(s)
           PY
       - name: Validate everything
-        env:
-          PYTHONPATH: .
+        env: {PYTHONPATH: .}
         run: |
           python -m compileall -q src
           python -m pytest -q tests/
@@ -40,25 +38,20 @@ jobs:
           from pathlib import Path
           modules=['config','features','market_data','models','prediction','multihorizon','selection','evaluation','retraining','ledger','morning_runner','evening','telegram_report','weekly_report','portfolio_report','quality_controls','live_quality_gate','intraday_engine','ipo_runner','stage28']
           for name in modules: importlib.import_module('src.'+name)
-          from src.portfolio_report import _sell_plan, _next_trading_date
+          from src.portfolio_report import _sell_plan,_next_trading_date
           assert _next_trading_date('2026-09-11',1)=='2026-09-15'
           assert _sell_plan({'AI_Confidence':80,'Horizon_20D':18.0,'Horizon_60D':16.0},450,500,'2026-09-07')[0]==18.0
-          required=['01_morning_prediction.yml','02_evening_evaluation.yml','03_weekly_report.yml']
-          wf=Path('.github/workflows')
+          wf=Path('.github/workflows'); required=['01_morning_prediction.yml','02_evening_evaluation.yml','03_weekly_report.yml']
           assert all((wf/x).exists() for x in required)
           print('FULL REPOSITORY CONTRACT: PASS')
           PY
-      - name: Commit validated source
+      - name: Commit validated source and cleanup
         run: |
           git config user.name 'stocks-ai-predictor'
           git config user.email 'actions@github.com'
           git add src/portfolio_report.py
           git diff --cached --quiet || git commit -m 'Fix canonical portfolio sell-plan contract'
           git push
-      - name: Remove temporary audit workflows
-        run: |
-          for f in .github/workflows/99_finalize_full_audit.yml .github/workflows/00_full_repo_audit_repair.yml .github/workflows/repair_portfolio_now.yml .github/workflows/_fix_dynamic_sell.yml; do
-            git rm -f "$f" 2>/dev/null || true
-          done
+          git rm -f .github/workflows/99_finalize_full_audit.yml .github/workflows/00_full_repo_audit_repair.yml .github/workflows/repair_portfolio_now.yml .github/workflows/_fix_dynamic_sell.yml 2>/dev/null || true
           git diff --cached --quiet || git commit -m 'Remove temporary repository repair workflows'
           git push || true
