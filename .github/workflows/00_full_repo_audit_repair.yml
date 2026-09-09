@@ -1,0 +1,119 @@
+name: One-time Full Repository Audit Repair
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  audit-repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Repair repository contracts and stale files
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root=Path('.')
+
+          # Keep the tested Stage 28 training window contract.
+          p=root/'src/config.py'
+          s=p.read_text()
+          s=s.replace('HISTORY_PERIOD="5y"','HISTORY_PERIOD="3y"')
+          p.write_text(s)
+
+          # Portfolio compatibility API: canonical prediction attachment + dynamic sell plan.
+          p=root/'src/portfolio_report.py'
+          s=p.read_text()
+          if 'def _attach_predictions(' not in s:
+              marker='def _forecast_return(row):'
+              helper='''def _attach_predictions(portfolio):\n    """Attach the latest canonical morning prediction to portfolio rows.\n\n    Matching is normalized to NSE symbols so both ``ABC`` and ``ABC.NS``\n    portfolio inputs bind to the same immutable morning prediction.\n    """\n    out=portfolio.copy()\n    predictions,prediction_date=_latest_predictions()\n    if predictions is None or predictions.empty:\n        return out,prediction_date\n    pred=predictions.copy()\n    if "Symbol" not in pred.columns:\n        return out,prediction_date\n    pred["_key"]=pred["Symbol"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    if "Ticker" in out.columns:\n        out["_key"]=out["Ticker"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    elif "Stock" in out.columns:\n        out["_key"]=out["Stock"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    else:\n        out["_key"]=""\n    pred=pred.drop_duplicates("_key",keep="last").set_index("_key")\n    for col in pred.columns:\n        if col=="_key":\n            continue\n        if col not in out.columns:\n            out[col]=out["_key"].map(pred[col])\n        else:\n            mapped=out["_key"].map(pred[col])\n            out[col]=out[col].where(out[col].notna(),mapped)\n    out.drop(columns=["_key"],inplace=True,errors="ignore")\n    return out,prediction_date\n\n'''
+              s=s.replace(marker,helper+marker,1)
+          if 'def _sell_plan(' not in s:
+              s+='''\n\ndef _sell_plan(row, current_price, average_price, cutoff_date):\n    """Return profit target, target price, horizon window, date and status."""\n    current=float(current_price); avg=float(average_price); minimum=float(TARGET_PROFIT_PCT)\n    confidence=_num(row,"AI_Confidence",0.0)\n    candidates=[]\n    for h in HORIZONS:\n        v=_num(row,f"Horizon_{h}D")\n        if np.isfinite(v):\n            candidates.append((h,float(v)))\n    qualifying=[x for x in candidates if x[1]>=minimum]\n    if not qualifying:\n        return minimum,avg*(1+minimum/100),"WAIT","-","WAIT"\n    best=max(qualifying,key=lambda x:(x[1],-x[0]))\n    profit=float(best[1]) if np.isfinite(confidence) and confidence>=MIN_AI_CONFIDENCE else minimum\n    price=avg*(1+profit/100)\n    return profit,price,f"{best[0]}D TARGET",_next_trading_date(cutoff_date,best[0]),"TARGET_DATE"\n'''
+          p.write_text(s)
+
+          # Telegram labels must reflect actual row count, never hard-code TOP 10.
+          p=root/'src/telegram_report.py'
+          s=p.read_text()
+          old='''def _prediction_table(selected):\n    if selected is None or selected.empty:return ["📈 *PREDICTED OHLC — TOP 10*","No predictions available."]\n    rows=[[str(r.get("Symbol","-")),_fmt(r.get("Pred_Open")),_fmt(r.get("Pred_High")),_fmt(r.get("Pred_Low")),_fmt(r.get("Pred_Close"))] for _,r in _sort(selected).head(10).iterrows()]\n    return ["📈 *PREDICTED OHLC — TOP 10*",*_table(["Stock","Open","High","Low","Close"],rows)]\n'''
+          new='''def _prediction_table(selected):\n    if selected is None or selected.empty:return ["📈 *PREDICTED OHLC — TOP 0*","No predictions available."]\n    n=min(10,len(selected))\n    rows=[[str(r.get("Symbol","-")),_fmt(r.get("Pred_Open")),_fmt(r.get("Pred_High")),_fmt(r.get("Pred_Low")),_fmt(r.get("Pred_Close"))] for _,r in _sort(selected).head(n).iterrows()]\n    return [f"📈 *PREDICTED OHLC — TOP {n}*",*_table(["Stock","Open","High","Low","Close"],rows)]\n'''
+          if old in s:
+              s=s.replace(old,new,1)
+          old='''def _horizon_table(selected):\n    if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","No multi-horizon predictions available."]\n    rows=[]\n    for _,r in _sort(selected).head(10).iterrows():rows.append([str(r.get("Symbol","-"))]+[_pct(_horizon_value(r,h)) for h in REPORT_HORIZONS]+[_horizon_status(r)])\n    return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","3D / 7D / 10D / 20D / 60D / 180D / 365D trading-day expected return.",*_table(["Stock","3D","7D","10D","20D","60D","180D","365D","Status"],rows,max_width=11)]\n'''
+          new='''def _horizon_table(selected):\n    if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 0*","No multi-horizon predictions available."]\n    n=min(10,len(selected));rows=[]\n    for _,r in _sort(selected).head(n).iterrows():rows.append([str(r.get("Symbol","-"))]+[_pct(_horizon_value(r,h)) for h in REPORT_HORIZONS]+[_horizon_status(r)])\n    return [f"🔮 *MULTI-HORIZON OUTLOOK — TOP {n}*","3D / 7D / 10D / 20D / 60D / 180D / 365D trading-day expected return.",*_table(["Stock","3D","7D","10D","20D","60D","180D","365D","Status"],rows,max_width=11)]\n'''
+          if old in s:
+              s=s.replace(old,new,1)
+          p.write_text(s)
+
+          # Make the Stage 28 manifest agree with the actual full-NSE configuration.
+          p=root/'src/stage28.py'
+          s=p.read_text().replace('"nifty150_universe"','"full_nse_equity_universe"')
+          s=s.replace('Stage 28 | 1-365D | Nifty 150 |','Stage 28 | 1-365D | Full NSE |')
+          p.write_text(s)
+
+          # README must not claim Nifty-150 when MAX_UNIVERSE=0 means full NSE.
+          p=root/'README.md'
+          s=p.read_text().replace('- Nifty-150 screening is preserved.','- Full NSE equity screening is enabled; final morning predictions remain capped at 10.')
+          s=s.replace('Nifty-150','full NSE')
+          p.write_text(s)
+
+          # Remove modules that are not imported anywhere and contain stale APIs.
+          for rel in ['src/workflow.py','src/telegram_report_patch.py','src/portfolio_decision_hardening.py','src/portfolio_long_horizon.py']:
+              q=root/rel
+              if q.exists(): q.unlink()
+          PY
+
+      - name: Validate syntax and full regression suite
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m compileall -q src
+          python -m pytest -q tests/
+
+      - name: Verify production graph
+        run: |
+          test "$(find .github/workflows -maxdepth 1 -type f -name '*.yml' | wc -l)" -eq 4
+          test -f .github/workflows/01_morning_prediction.yml
+          test -f .github/workflows/02_evening_evaluation.yml
+          test -f .github/workflows/03_weekly_report.yml
+          python - <<'PY'
+          import importlib
+          mods=['src.config','src.features','src.market_data','src.models','src.prediction','src.multihorizon','src.selection','src.stage4_engine','src.stage45_engine','src.final_intelligence','src.evaluation','src.retraining','src.ledger','src.morning_runner','src.evening','src.telegram_report','src.weekly_report','src.portfolio_report','src.quality_controls','src.live_quality_gate','src.intraday_engine','src.ipo_runner','src.stage28']
+          for m in mods: importlib.import_module(m)
+          from src.portfolio_report import _sell_plan,_attach_predictions
+          from src.stage28 import validate_contract
+          ok,errors=validate_contract()
+          assert ok,errors
+          print('Production import graph and contracts OK')
+          PY
+
+      - name: Commit validated repair and remove temporary workflows
+        run: |
+          git config user.name 'stocks-ai-predictor'
+          git config user.email 'actions@github.com'
+          git add -A
+          git diff --cached --quiet || git commit -m 'Harden Stage 28 repository integration'
+          git pull --rebase origin main
+          git push
+          git rm -f .github/workflows/00_full_repo_audit_repair.yml .github/workflows/repair_portfolio_now.yml .github/workflows/_fix_dynamic_sell.yml 2>/dev/null || true
+          git commit -m 'Remove one-time repair workflows' || true
+          git push || true
