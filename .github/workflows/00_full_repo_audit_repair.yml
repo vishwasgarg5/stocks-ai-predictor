@@ -13,52 +13,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with: {fetch-depth: 0}
-      - name: Setup Python
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with: {python-version: '3.11'}
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Apply repository repairs
+      - run: python -m pip install -r requirements.txt
+      - name: Repair source contracts
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
           root=Path('.')
-
-          p=root/'src/config.py'; s=p.read_text().replace('HISTORY_PERIOD="5y"','HISTORY_PERIOD="3y"'); p.write_text(s)
-
-          p=root/'src/portfolio_report.py'; s=p.read_text()
+          p=root/'src/config.py';s=p.read_text().replace('HISTORY_PERIOD="5y"','HISTORY_PERIOD="3y"');p.write_text(s)
+          p=root/'src/portfolio_report.py';s=p.read_text()
           if 'def _attach_predictions(' not in s:
-              marker='def _forecast_return(row):'
-              helper='''def _attach_predictions(portfolio):\n    """Attach the latest canonical morning prediction to portfolio rows."""\n    out=portfolio.copy(); predictions,prediction_date=_latest_predictions()\n    if predictions is None or predictions.empty or "Symbol" not in predictions.columns:return out,prediction_date\n    pred=predictions.copy(); pred["_key"]=pred["Symbol"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    if "Ticker" in out.columns:out["_key"]=out["Ticker"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    elif "Stock" in out.columns:out["_key"]=out["Stock"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    else:out["_key"]=""\n    pred=pred.drop_duplicates("_key",keep="last").set_index("_key")\n    for col in pred.columns:\n        if col=="_key":continue\n        mapped=out["_key"].map(pred[col])\n        out[col]=out[col].where(out[col].notna(),mapped) if col in out.columns else mapped\n    return out.drop(columns=["_key"],errors="ignore"),prediction_date\n\n'''
-              s=s.replace(marker,helper+marker,1)
+              s=s.replace('def _forecast_return(row):','''def _attach_predictions(portfolio):\n    out=portfolio.copy(); predictions,prediction_date=_latest_predictions()\n    if predictions is None or predictions.empty or "Symbol" not in predictions.columns:return out,prediction_date\n    pred=predictions.copy();pred["_key"]=pred["Symbol"].astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    out["_key"]=(out.get("Ticker",out.get("Stock",""))).astype(str).str.upper().str.replace(r"\\.NS$","",regex=True)\n    pred=pred.drop_duplicates("_key",keep="last").set_index("_key")\n    for col in pred.columns:\n        if col=="_key":continue\n        mapped=out["_key"].map(pred[col]);out[col]=out[col].where(out[col].notna(),mapped) if col in out.columns else mapped\n    return out.drop(columns=["_key"],errors="ignore"),prediction_date\n\ndef _forecast_return(row):''',1)
           if 'def _sell_plan(' not in s:
-              s+='''\n\ndef _sell_plan(row,current_price,average_price,cutoff_date):\n    current=float(current_price); avg=float(average_price); minimum=float(TARGET_PROFIT_PCT); confidence=_num(row,"AI_Confidence",0.0)\n    candidates=[(h,_num(row,f"Horizon_{h}D")) for h in HORIZONS]; candidates=[(h,float(v)) for h,v in candidates if np.isfinite(v)]\n    qualifying=[x for x in candidates if x[1]>=minimum]\n    if not qualifying:return minimum,avg*(1+minimum/100),"WAIT","-","WAIT"\n    best=max(qualifying,key=lambda x:(x[1],-x[0])); profit=float(best[1]) if confidence>=MIN_AI_CONFIDENCE else minimum\n    return profit,avg*(1+profit/100),f"{best[0]}D TARGET",_next_trading_date(cutoff_date,best[0]),"TARGET_DATE"\n'''
+              s+='''\n\ndef _sell_plan(row,current_price,average_price,cutoff_date):\n    current=float(current_price);avg=float(average_price);minimum=float(TARGET_PROFIT_PCT);confidence=_num(row,"AI_Confidence",0.0)\n    candidates=[(h,_num(row,f"Horizon_{h}D")) for h in HORIZONS];qualifying=[(h,float(v)) for h,v in candidates if np.isfinite(v) and float(v)>=minimum]\n    if not qualifying:return minimum,avg*(1+minimum/100),"WAIT","-","WAIT"\n    best=max(qualifying,key=lambda x:(x[1],-x[0]));profit=float(best[1]) if confidence>=MIN_AI_CONFIDENCE else minimum\n    return profit,avg*(1+profit/100),f"{best[0]}D TARGET",_next_trading_date(cutoff_date,best[0]),"TARGET_DATE"\n'''
           p.write_text(s)
-
-          p=root/'src/telegram_report.py'; s=p.read_text()
+          p=root/'src/telegram_report.py';s=p.read_text()
           s=s.replace('def _prediction_table(selected):\n    if selected is None or selected.empty:return ["📈 *PREDICTED OHLC — TOP 10*","No predictions available."]','def _prediction_table(selected):\n    if selected is None or selected.empty:return ["📈 *PREDICTED OHLC — TOP 0*","No predictions available."]\n    n=min(10,len(selected))')
-          s=s.replace('for _,r in _sort(selected).head(10).iterrows()]\n    return ["📈 *PREDICTED OHLC — TOP 10*"','for _,r in _sort(selected).head(n).iterrows()]\n    return [f"📈 *PREDICTED OHLC — TOP {n}"')
+          s=s.replace('for _,r in _sort(selected).head(10).iterrows()]\n    return ["📈 *PREDICTED OHLC — TOP 10*"','for _,r in _sort(selected).head(n).iterrows()]\n    return [f"📈 *PREDICTED OHLC — TOP {n}*"')
           s=s.replace('def _horizon_table(selected):\n    if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","No multi-horizon predictions available."]','def _horizon_table(selected):\n    if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 0*","No multi-horizon predictions available."]\n    n=min(10,len(selected))')
           s=s.replace('for _,r in _sort(selected).head(10).iterrows():rows.append','for _,r in _sort(selected).head(n).iterrows():rows.append')
-          s=s.replace('return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*"','return [f"🔮 *MULTI-HORIZON OUTLOOK — TOP {n}"')
-          # Preserve the literal Markdown closing star lost by the compact replacement above.
-          s=s.replace('f"📈 *PREDICTED OHLC — TOP {n}"','f"📈 *PREDICTED OHLC — TOP {n}*"')
-          s=s.replace('f"🔮 *MULTI-HORIZON OUTLOOK — TOP {n}"','f"🔮 *MULTI-HORIZON OUTLOOK — TOP {n}*"')
-          # Portfolio target/status are dynamic: a percent target is formatted as percent, a rupee target remains a price.
-          s=s.replace('def _portfolio_horizon_status(x):\n    vals=', 'def _portfolio_horizon_status(x):\n    explicit=str(x.get("Portfolio_Target_Status",x.get("Sell_Target_Status","")) or "").strip()\n    if explicit:return explicit.replace("_"," ")\n    vals=',1)
+          s=s.replace('return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*"','return [f"🔮 *MULTI-HORIZON OUTLOOK — TOP {n}*"')
+          s=s.replace('def _portfolio_horizon_status(x):\n    vals=','def _portfolio_horizon_status(x):\n    explicit=str(x.get("Portfolio_Target_Status",x.get("Sell_Target_Status","")) or "").strip()\n    if explicit:return explicit.replace("_"," ")\n    vals=',1)
           old='target=x.get("Profit_Target",x.get("Sell_Target_Profit_Pct",x.get("Portfolio_Target_Pct")));rows.append([x.get("Stock","-"),x.get("Quantity","-"),_decision(x.get("Decision")),x.get("Current_Price","-"),x.get("Average_Price","-"),x.get("AI_Target","-"),x.get("Return_Pct","-"),target if _num(target) is not None else "-",_portfolio_horizon_status(x),str(x.get("Sell_Window",x.get("Sell_Date","-")))])'
           new='profit_target=x.get("Profit_Target")\n        if profit_target is not None and _num(profit_target) is not None:target_text=str(profit_target)\n        else:\n            target_pct=x.get("Portfolio_Target_Pct",x.get("Sell_Target_Profit_Pct"))\n            target_text="-" if _num(target_pct) is None else f"{float(_num(target_pct)):.1f}%"\n        rows.append([x.get("Stock","-"),x.get("Quantity","-"),_decision(x.get("Decision")),x.get("Current_Price","-"),x.get("Average_Price","-"),x.get("AI_Target","-"),x.get("Return_Pct","-"),target_text,_portfolio_horizon_status(x),str(x.get("Sell_Window",x.get("Sell_Date","-")))])'
           s=s.replace(old,new,1).replace('["Stock","Qty","Decision","CMP","Avg","AI Target","Return","10% Target","Horizon","Sell Window"]','["Stock","Qty","Decision","CMP","Avg","AI Target","Return","Target","Horizon","Sell Window"]')
           p.write_text(s)
-
-          p=root/'src/stage28.py'; s=p.read_text().replace('"nifty150_universe"','"full_nse_equity_universe"').replace('Stage 28 | 1-365D | Nifty 150 |','Stage 28 | 1-365D | Full NSE |'); p.write_text(s)
-          p=root/'README.md'; s=p.read_text().replace('- Nifty-150 screening is preserved.','- Full NSE equity screening is enabled; final morning predictions remain capped at 10.').replace('Nifty-150','full NSE'); p.write_text(s)
-
+          p=root/'src/stage28.py';s=p.read_text().replace('"nifty150_universe"','"full_nse_equity_universe"').replace('Stage 28 | 1-365D | Nifty 150 |','Stage 28 | 1-365D | Full NSE |');p.write_text(s)
+          p=root/'README.md';s=p.read_text().replace('- Nifty-150 screening is preserved.','- Full NSE equity screening is enabled; final morning predictions remain capped at 10.').replace('Nifty-150','full NSE');p.write_text(s)
           for rel in ['src/workflow.py','src/telegram_report_patch.py','src/portfolio_decision_hardening.py','src/portfolio_long_horizon.py']:
+              q=root/rel
+              if q.exists():q.unlink()
+          # Delete all temporary repair workflow files before pytest so the repository's own exact-three-workflow test passes.
+          for rel in ['.github/workflows/00_full_repo_audit_repair.yml','.github/workflows/repair_portfolio_now.yml','.github/workflows/_fix_dynamic_sell.yml']:
               q=root/rel
               if q.exists():q.unlink()
           PY
@@ -76,11 +65,11 @@ jobs:
           for m in mods:importlib.import_module(m)
           from src.portfolio_report import _sell_plan,_attach_predictions
           from src.stage28 import validate_contract
-          ok,errors=validate_contract(); assert ok,errors
-          assert all((Path('.github/workflows')/x).exists() for x in ['01_morning_prediction.yml','02_evening_evaluation.yml','03_weekly_report.yml'])
-          print('All production modules import and Stage 28 contract passes')
+          ok,errors=validate_contract();assert ok,errors
+          assert sorted(p.name for p in Path('.github/workflows').glob('*.yml'))==['01_morning_prediction.yml','02_evening_evaluation.yml','03_weekly_report.yml']
+          print('Production graph and contract validation OK')
           PY
-      - name: Commit validated repair and remove temporary workflows
+      - name: Commit validated source and cleanup
         run: |
           git config user.name 'stocks-ai-predictor'
           git config user.email 'actions@github.com'
@@ -88,6 +77,3 @@ jobs:
           git diff --cached --quiet || git commit -m 'Harden Stage 28 repository integration'
           git pull --rebase origin main
           git push
-          git rm -f .github/workflows/00_full_repo_audit_repair.yml .github/workflows/repair_portfolio_now.yml .github/workflows/_fix_dynamic_sell.yml 2>/dev/null || true
-          git commit -m 'Remove one-time repair workflows' || true
-          git push || true
