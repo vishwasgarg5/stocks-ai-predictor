@@ -67,15 +67,20 @@ def select_top_stocks(candidates,top_n=TOP_N,regime="SIDEWAYS",min_score=65.0,mi
     if strict.empty:strict=_apply_uncertainty_cap(base[base["Direction"].astype(str).str.upper().eq("UP")])
     if strict.empty:strict=base[base["Direction"].astype(str).str.upper().eq("UP")].copy()
     if strict.empty:
-        # Preserve a deterministic prediction ledger even when no recommendation passes.
-        # These rows are explicitly prediction-only; downstream final_action still guards BUY.
         strict=_apply_uncertainty_cap(scored.copy());fallback_mode=True
     if strict.empty:strict=scored.copy();fallback_mode=True
     strict["SelectionTier"]="PREDICTION_ONLY" if fallback_mode else "RECOMMENDED"
+    # The ledger is a prediction set, not the BUY list. Fill from the full
+    # scored pool when strict recommendations are too sparse, while preserving
+    # the hard maximum of six rows per price bucket.
     capped=_bucket_cap(strict,max_per_bucket)
-    if bucket_only:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
     n=None if top_n is None else int(top_n)
     if n is None or n<=0:return capped.sort_values(["PriceBucket","TradeConfidence","Score"],ascending=[True,False,False]).reset_index(drop=True)
+    if len(capped)<n:
+        pool=_bucket_cap(_apply_uncertainty_cap(scored.copy()),max_per_bucket)
+        if len(pool)<n:pool=_bucket_cap(scored.copy(),max_per_bucket)
+        extra=pool[~pool["Symbol"].isin(capped["Symbol"])].sort_values(["TradeConfidence","Score","Confidence","Direction_Confidence"],ascending=False)
+        capped=pd.concat([capped,extra],ignore_index=True).drop_duplicates("Symbol")
     seeded=[]
     for _,group in capped.groupby("PriceBucket",sort=False):
         if not group.empty:seeded.append(group.iloc[0])
