@@ -1,4 +1,4 @@
-"""Stage 4.2 prediction API: next-session OHLCV + optional multi-horizon forecasts."""
+"""Daily prediction API: next-session OHLCV plus optional multi-horizon forecasts."""
 import numpy as np
 import pandas as pd
 from .features import get_feature_columns, prepare_supervised, build_features, technical_score
@@ -28,11 +28,13 @@ def predict_stock(df,bundle,cutoff_date):
     if x.empty: raise ValueError("No features")
     cutoff=pd.Timestamp(cutoff_date); x=x[x.index<=cutoff]; usable=x[bundle["features"]].dropna()
     if usable.empty: raise ValueError("No usable latest feature row")
-    latest=usable.iloc[[-1]]; predictions={}; agreements=[]
+    latest=usable.iloc[[-1]]; predictions={}; agreements=[]; dispersion=[]
     for target in TARGETS:
         final_prediction,component_predictions=predict_ensemble(bundle["targets"][target],latest); value=float(final_prediction[0])
         if not np.isfinite(value): raise ValueError(f"Non-finite {target} prediction")
         predictions[target]=value; agreements.append(float(model_agreement(component_predictions,final_prediction)[0]))
+        component_values=np.asarray([float(v[0]) for v in component_predictions.values()],dtype=float)
+        dispersion.append(float(np.std(component_values)/max(abs(value),1e-8)*100))
     log_volume,_=predict_ensemble(bundle["volume"],latest); predicted_volume=float(max(0.0,np.expm1(log_volume[0])))
     if not np.isfinite(predicted_volume): raise ValueError("Non-finite Volume prediction")
     predictions=_enforce_ohlc_consistency(predictions)
@@ -41,7 +43,7 @@ def predict_stock(df,bundle,cutoff_date):
     except Exception: direction_probability=50.0
     current_close=float(latest["Close"].iloc[0]); expected_return=predictions["Close"]/current_close-1
     confidence=float(0.65*np.mean(agreements)+0.35*direction_probability)
-    return {"Current_Price":current_close,"Current_Volume":float(latest["Volume"].iloc[0]),"Pred_Open":predictions["Open"],"Pred_High":predictions["High"],"Pred_Low":predictions["Low"],"Pred_Close":predictions["Close"],"Pred_Volume":predicted_volume,"Expected_Return":expected_return*100,"Direction":{0:"DOWN",1:"NEUTRAL",2:"UP"}.get(direction_label,"NEUTRAL"),"Direction_Confidence":direction_probability,"Confidence":confidence,"TechnicalScore":technical_score(df[df.index<=cutoff]),"ValidationMAPE":bundle["validation_mape"],"ValidationError":bundle["validation_error"],"DirectionValidationAccuracy":bundle["direction_validation_accuracy"]}
+    return {"Current_Price":current_close,"Current_Volume":float(latest["Volume"].iloc[0]),"Pred_Open":predictions["Open"],"Pred_High":predictions["High"],"Pred_Low":predictions["Low"],"Pred_Close":predictions["Close"],"Pred_Volume":predicted_volume,"Expected_Return":expected_return*100,"Direction":{0:"DOWN",1:"NEUTRAL",2:"UP"}.get(direction_label,"NEUTRAL"),"Direction_Confidence":direction_probability,"Confidence":confidence,"EnsembleDispersionPct":float(np.mean(dispersion)) if dispersion else 0.0,"TechnicalScore":technical_score(df[df.index<=cutoff]),"ValidationMAPE":bundle["validation_mape"],"ValidationError":bundle["validation_error"],"DirectionValidationAccuracy":bundle["direction_validation_accuracy"]}
 
 
 def add_multihorizon_predictions(df,bundle,cutoff_date):
