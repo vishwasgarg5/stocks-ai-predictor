@@ -1,0 +1,67 @@
+name: Temporary - Fix dynamic sell helpers
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Patch portfolio helpers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/portfolio_report.py')
+          s=p.read_text()
+          if 'def _sell_plan(' not in s:
+              s += r'''
+
+# Dynamic sell-plan compatibility helpers.
+def _next_trading_date(value, days=1):
+    d=pd.Timestamp(value).date()
+    for _ in range(max(0, int(days))):
+        d += timedelta(days=1)
+        while not _is_nse_trading_day(d):
+            d += timedelta(days=1)
+    return d.isoformat()
+
+def _sell_plan(row, current_price, average_price, cutoff_date):
+    current=float(current_price); avg=float(average_price)
+    confidence=_num(row, 'AI_Confidence', 0.0)
+    minimum=float(TARGET_PROFIT_PCT)
+    horizons=(1,3,5,7,20,60,90,180,365)
+    candidates=[]
+    for h in horizons:
+        v=_num(row, f'Horizon_{h}D')
+        if np.isfinite(v): candidates.append((h, float(v)))
+    qualifying=[x for x in candidates if x[1] >= minimum]
+    if not qualifying:
+        return minimum, avg*(1+minimum/100), 'WAIT', '-', 'WAIT'
+    best=max(qualifying, key=lambda x:(x[1], -x[0]))
+    profit=float(best[1])
+    if not np.isfinite(confidence) or confidence < MIN_AI_CONFIDENCE:
+        profit=minimum
+    price=avg*(1+profit/100)
+    window=f'{best[0]}D TARGET'
+    date=_next_trading_date(cutoff_date, best[0])
+    return profit, price, window, date, 'TARGET_DATE'
+'''
+              p.write_text(s)
+          PY
+      - name: Validate full suite
+        run: |
+          python -m compileall -q src
+          python -m pytest -q tests/
+      - name: Commit and push
+        run: |
+          git config user.name "stocks-ai-predictor"
+          git config user.email "actions@github.com"
+          git add src/portfolio_report.py
+          git diff --cached --quiet || git commit -m "Fix dynamic portfolio sell helpers"
+          git push
