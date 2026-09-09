@@ -39,12 +39,11 @@ def add_prediction_uncertainty(candidates, data_map, bundles):
             if spread_values:
                 row_spread = float(np.mean(spread_values))
             else:
-                # Safe fallback when the caller cannot retain trained bundles.
-                # This keeps uncertainty deterministic rather than silently failing.
-                preds = [pd.to_numeric(row.get(f"Pred_{t}"), errors="coerce") for t in TARGETS]
-                p = [float(x) for x in preds if pd.notna(x)]
-                center = max(abs(float(np.mean(p))), 1e-6) if p else 1.0
-                row_spread = float((np.std(p) / center) * 100) if len(p) > 1 else min(max(row_vol, 1.0), 12.0)
+                # The caller may not retain fitted estimator objects. In that case
+                # use the dispersion computed during prediction, not OHLC spread.
+                row_spread = float(pd.to_numeric(row.get("EnsembleDispersionPct", np.nan), errors="coerce"))
+                if not np.isfinite(row_spread):
+                    row_spread = min(max(row_vol, 1.0), 12.0)
         except Exception:
             row_spread = min(max(row_vol, 3.0), 12.0)
         spreads.append(row_spread); vols.append(row_vol); hist.append(row_hist); missing.append(row_missing); stale.append(row_stale); anomaly.append(row_anomaly)
