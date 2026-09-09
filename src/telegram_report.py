@@ -5,7 +5,7 @@ from .config import TELEGRAM_MAX_LENGTH,MODEL_VERSION
 _SECTION="\n§§TELEGRAM_SECTION§§\n"
 _BUCKET_ORDER=["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"]
 _BUCKET_LABELS={"B1":">2500","B2":"1000-2499","B3":"500-999","B4":"250-499","B5":"100-249","B6":"50-99","B7":"10-49"}
-_CODE_RE=re.compile(r"^```$");REPORT_HORIZONS=(3,7,10)
+_CODE_RE=re.compile(r"^```$");REPORT_HORIZONS=(3,7,10,20,60,180,365)
 def _markdown_to_telegram_html(text):
     chunks=text.split("```");out=[]
     for i,chunk in enumerate(chunks):
@@ -142,7 +142,7 @@ def _horizon_table(selected):
     if selected is None or selected.empty:return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","No multi-horizon predictions available."]
     rows=[]
     for _,r in _sort(selected).head(10).iterrows():rows.append([str(r.get("Symbol","-"))]+[_pct(_horizon_value(r,h)) for h in REPORT_HORIZONS]+[_horizon_status(r)])
-    return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","3D / 7D / 10D trading-day expected return.",*_table(["Stock","3D","7D","10D","Status"],rows,max_width=13)]
+    return ["🔮 *MULTI-HORIZON OUTLOOK — TOP 10*","3D / 7D / 10D / 20D / 60D / 180D / 365D trading-day expected return.",*_table(["Stock","3D","7D","10D","20D","60D","180D","365D","Status"],rows,max_width=11)]
 def _jump(j):
     if j is None or j.empty:return ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
     x=j.copy()
@@ -155,7 +155,7 @@ def _jump(j):
         if len(rows)==5:break
     return ["🔥 *JUMP WATCH — TOP 5*",*_table(["Stock","CMP","Target","Upside","Prob"],rows)] if rows else ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
 def _intraday(x):
-    if x is None or x.empty:return ["⚡ *INTRADAY TOP 5*","No intraday data/setup available."]
+    if x is None or x.empty:return ["⚡ *INTRADAY TOP 5*","No qualifying intraday setup. Live intraday feed may be unavailable, stale, or all candidates failed quality/score gates."]
     rows=[]
     for _,r in x.head(5).iterrows():
         conf=max(0,min(100,_num(r.get("Confidence"),0) or 0));rows.append([str(r.get("Symbol","-")),str(r.get("Status",_decision(r.get("Bias")))),_decision(r.get("Bias")),f"₹{_fmt(r.get('Current'))}",f"₹{_fmt(r.get('Target'))}",f"₹{_fmt(r.get('StopLoss'))}",f"{conf:.0f}%"])
@@ -204,5 +204,5 @@ def evening_report(market_date,evaluation,metrics,retraining,**kwargs):
     return "\n".join(lines)
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
     accuracy,scan=kwargs.get("accuracy",{}),kwargs.get("scan",{});snapshot,regime=kwargs.get("market_snapshot",{}),kwargs.get("regime","-");portfolio,ipo=kwargs.get("portfolio",{}),kwargs.get("ipo",pd.DataFrame())
-    lines=[f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}",_SECTION,"📊 *MARKET OVERVIEW*",*_market(snapshot,regime),_scan(scan),f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))} | Samples {int(_num(accuracy.get('AccuracySamples',accuracy.get('Samples',0)),0) or 0)}",_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(ipo),_SECTION,*_portfolio(portfolio)]
+    lines=[f"📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}",_SECTION,"📊 *MARKET OVERVIEW*",*_market(snapshot,regime),_scan(scan),(f"Accuracy: PENDING EVENING EVALUATION | Samples 0" if int(_num(accuracy.get("AccuracySamples",accuracy.get("Samples",0)),0) or 0)==0 else f"Accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} → {_accuracy(accuracy.get('CurrentAccuracy'))} | Samples {int(_num(accuracy.get('AccuracySamples',accuracy.get('Samples',0)),0) or 0)}"),_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(ipo),_SECTION,*_portfolio(portfolio)]
     return "\n".join(lines)
