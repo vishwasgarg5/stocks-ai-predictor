@@ -17,7 +17,6 @@ def download_intraday(symbol, cutoff_date=None):
             cutoff=pd.Timestamp(cutoff_date)
             if getattr(df.index,"tz",None) is not None:
                 cutoff=cutoff.tz_localize(df.index.tz) if cutoff.tzinfo is None else cutoff.tz_convert(df.index.tz)
-            # Include the complete cutoff session, not only timestamps <= midnight.
             df=df[pd.to_datetime(df.index).date <= cutoff.date()]
         return df
     except Exception as exc:
@@ -39,6 +38,9 @@ def add_intraday_features(df):
 def calculate_intraday_setup(df):
     if df.empty:return None,"NO_DATA"
     x=add_intraday_features(df).dropna()
+    # A complete NSE session has roughly 25-26 fifteen-minute bars. The old
+    # 80-row gate therefore rejected every single completed day after the
+    # cutoff filter. Keep a small safety margin instead.
     if len(x)<INTRADAY_MIN_ROWS:return None,"INSUFFICIENT_DATA"
     row=x.iloc[-1]; current,vwap,ema9,ema20=map(float,(row["Close"],row["VWAP"],row["EMA9"],row["EMA20"]))
     relative_volume,momentum,range_pct=float(row["RelativeVolume"]),float(row["Momentum"]),float(row["Range"])
@@ -48,16 +50,24 @@ def calculate_intraday_setup(df):
     score += 10 if momentum>0.01 else -10 if momentum<-0.01 else 0
     score += 6 if range_pct>0.015 else 0
     score=float(np.clip(score,0,100)); bias="UP" if score>=60 else "DOWN" if score<=40 else "NEUTRAL"
-    if bias=="NEUTRAL":return None,"NEUTRAL"
-    # Stage 10.1: keep a useful ranked watchlist without requiring an unusually rare setup.
-    if score<65:return None,"LOW_SCORE"
-    if relative_volume<1.00:return None,"LOW_RELATIVE_VOLUME"
     expected_move=max(abs(momentum),range_pct*1.5,INTRADAY_MIN_MOVE)
-    if bias=="UP":target,stop_loss=current*(1+expected_move),current*(1-expected_move*0.55)
-    else:target,stop_loss=current*(1-expected_move),current*(1+expected_move*0.55)
-    confidence=min(95.0,50+abs(score-50)*0.7+min(relative_volume,3)*5)
-    if confidence<60:return None,"LOW_CONFIDENCE"
-    return {"Current":current,"Bias":bias,"Target":target,"StopLoss":stop_loss,"ExpectedMove":expected_move*100,"Score":score,"Confidence":confidence,"RelativeVolume":relative_volume,"VWAP":vwap,"EMA9":ema9,"EMA20":ema20},"QUALIFIED"
+    if bias=="NEUTRAL":return None,"NEUTRAL"
+    # Strict trade setup first.
+    if score>=65 and relative_volume>=1.00:
+        if bias=="UP":target,stop_loss=current*(1+expected_move),current*(1-expected_move*0.55)
+        else:target,stop_loss=current*(1-expected_move),current*(1+expected_move*0.55)
+        confidence=min(95.0,50+abs(score-50)*0.7+min(relative_volume,3)*5)
+        if confidence>=60:
+            return {"Current":current,"Bias":bias,"Target":target,"StopLoss":stop_loss,"ExpectedMove":expected_move*100,"Score":score,"Confidence":confidence,"RelativeVolume":relative_volume,"VWAP":vwap,"EMA9":ema9,"EMA20":ema20,"Status":"QUALIFIED"},"QUALIFIED"
+    # If no strict setup exists, retain the strongest directional signal as a
+    # WATCH row rather than reporting an empty intraday section. This does not
+    # turn a weak setup into a BUY recommendation.
+    if score>=55 and relative_volume>=0.80:
+        if bias=="UP":target,stop_loss=current*(1+expected_move),current*(1-expected_move*0.55)
+        else:target,stop_loss=current*(1-expected_move),current*(1+expected_move*0.55)
+        confidence=min(80.0,45+abs(score-50)*0.6+min(relative_volume,2)*4)
+        return {"Current":current,"Bias":bias,"Target":target,"StopLoss":stop_loss,"ExpectedMove":expected_move*100,"Score":score,"Confidence":confidence,"RelativeVolume":relative_volume,"VWAP":vwap,"EMA9":ema9,"EMA20":ema20,"Status":"WATCH"},"WATCH"
+    return None,"LOW_SCORE"
 
 
 def generate_intraday_watchlist(symbols, cutoff_date=None, max_workers=6):
@@ -72,14 +82,15 @@ def generate_intraday_watchlist(symbols, cutoff_date=None, max_workers=6):
                 df=future.result()
                 if not df.empty:data[symbol]=df
             except Exception as exc:print(f"{symbol}: {exc}")
-    counts={"SCANNED":len(symbols),"DATA_AVAILABLE":len(data),"NO_DATA":max(0,len(symbols)-len(data)),"INSUFFICIENT_DATA":0,"NEUTRAL":0,"LOW_SCORE":0,"LOW_RELATIVE_VOLUME":0,"LOW_CONFIDENCE":0,"QUALIFIED":0}
+    counts={"SCANNED":len(symbols),"DATA_AVAILABLE":len(data),"NO_DATA":max(0,len(symbols)-len(data)),"INSUFFICIENT_DATA":0,"NEUTRAL":0,"LOW_SCORE":0,"LOW_RELATIVE_VOLUME":0,"LOW_CONFIDENCE":0,"QUALIFIED":0,"WATCH":0}
     results=[]
     for symbol,df in data.items():
         try:
-            setup,reason=calculate_intraday_setup(df); counts[reason]=counts.get(reason,0)+1
+            setup,reason=calculate_intraday_setup(df);counts[reason]=counts.get(reason,0)+1
             if setup is not None:results.append({"Symbol":symbol,**setup})
         except Exception as exc:print(f"{symbol}: setup failed: {exc}")
-    counts["QUALIFIED"]=len(results)
+    counts["QUALIFIED"]=sum(1 for r in results if r.get("Status")=="QUALIFIED")
+    counts["WATCH"]=sum(1 for r in results if r.get("Status")=="WATCH")
     if not results:
         empty=pd.DataFrame();empty.attrs["scan_stats"]=counts;return empty
     result=pd.DataFrame(results).sort_values(["Score","Confidence","RelativeVolume"],ascending=False).head(INTRADAY_TOP_N).reset_index(drop=True)
