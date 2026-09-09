@@ -1,7 +1,14 @@
 """Stocks AI Predictor package.
 
-Keep package initialization intentionally empty. Entry points such as
-``python -m src.morning_runner`` must never be imported or monkey-patched from
-package initialization, otherwise runpy can load the entry point before it is
-executed and emit a circular-import RuntimeWarning.
+Package initialization may load safe runtime hardening, but it must never import
+an executable entry point such as ``src.morning_runner``. Keeping the entry
+point out of ``sys.modules`` until runpy executes it prevents circular-import
+RuntimeWarnings from ``python -m src.morning_runner``.
 """
+
+# runtime_hardening imports only supporting modules and never the executable
+# morning runner, so its freshness/selection guards remain active.
+try:
+    from . import runtime_hardening as _runtime_hardening
+except Exception:
+    _runtime_hardening = None
