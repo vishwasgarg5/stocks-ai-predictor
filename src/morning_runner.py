@@ -1,4 +1,4 @@
-"""Stage 28 morning pipeline with bounded AI candidate pool and deterministic top-10 selection."""
+"""Stage 28 morning pipeline with bounded AI candidate pool and deterministic top-10 prediction selection."""
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -9,7 +9,7 @@ from .market_data import load_universe,download_many,filter_liquid_universe,get_
 from .features import technical_score
 from .prediction import train_stock_bundle,predict_stock,add_multihorizon_predictions
 from .multihorizon import train_horizon_models
-from .selection import select_top_stocks,score_candidates
+from .selection import select_prediction_set,score_candidates
 from .stage4_engine import add_stage4_context
 from .stage45_engine import add_prediction_uncertainty,add_market_risk
 from .final_intelligence import apply_final_intelligence,update_learning_state,final_stage_manifest
@@ -42,8 +42,7 @@ def _attach_horizons(candidates,data_map,cutoff_date):
             print(f"{symbol}: horizon prediction failed: {exc}");row["MultiHorizonExpectedReturn"]=0.0
             for horizon in HORIZONS:row[f"Horizon_{horizon}D_Status"]="MODEL_FAILED"
         return row
-    rows=[]
-    items=list(candidates.iterrows())
+    rows=[];items=list(candidates.iterrows())
     with ThreadPoolExecutor(max_workers=min(2,max(1,len(items)))) as pool:
         futures=[pool.submit(train_one,item) for item in items]
         for future in as_completed(futures):rows.append(future.result())
@@ -52,21 +51,16 @@ def _attach_horizons(candidates,data_map,cutoff_date):
 def _train_prediction(item,data_map,cutoff_date,variant,score_map):
     symbol=item
     try:
-        bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False)
-        result=predict_stock(data_map[symbol],bundle,cutoff_date)
+        bundle=train_stock_bundle(data_map[symbol],symbol,cutoff_date,variant,train_horizons=False);result=predict_stock(data_map[symbol],bundle,cutoff_date)
         return {"Symbol":symbol,**result,"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"DataCutoff":str(cutoff_date),"PreModelScore":score_map.get(symbol,0.0)}
-    except Exception as exc:
-        print(f"{symbol}: prediction failed: {exc}");return None
+    except Exception as exc:print(f"{symbol}: prediction failed: {exc}");return None
 
 def _jump_from_prediction_pool(prediction_pool):
     if prediction_pool.empty:return pd.DataFrame()
     rows=[]
     for _,r in prediction_pool.head(JUMP_CANDIDATE_N).iterrows():
         try:
-            current=float(r["Current_Price"]);high=float(r["Pred_High"]);close=float(r["Pred_Close"]);confidence=float(r.get("Confidence",50));technical=float(r.get("TechnicalScore",50));upside=float(r.get("Horizon_7D",0.0) if pd.notna(r.get("Horizon_7D",np.nan)) else 0.0)
-            high_return=high/current-1;close_return=close/current-1;max_potential=max(high_return,upside/100)
-            probability=float(np.clip(50+max_potential*250+(confidence-50)*0.35,0,95))
-            score=float(np.clip(0.25*np.clip(high_return/max(JUMP_THRESHOLD,0.01)*100,0,100)+0.15*np.clip(close_return/max(JUMP_THRESHOLD,0.01)*100,0,100)+0.20*np.clip(upside/max(JUMP_THRESHOLD*100,1.0)*100,0,100)+0.20*probability+0.20*technical,0,100))
+            current=float(r["Current_Price"]);high=float(r["Pred_High"]);close=float(r["Pred_Close"]);confidence=float(r.get("Confidence",50));technical=float(r.get("TechnicalScore",50));upside=float(r.get("Horizon_7D",0.0) if pd.notna(r.get("Horizon_7D",np.nan)) else 0.0);high_return=high/current-1;close_return=close/current-1;max_potential=max(high_return,upside/100);probability=float(np.clip(50+max_potential*250+(confidence-50)*0.35,0,95));score=float(np.clip(0.25*np.clip(high_return/max(JUMP_THRESHOLD,0.01)*100,0,100)+0.15*np.clip(close_return/max(JUMP_THRESHOLD,0.01)*100,0,100)+0.20*np.clip(upside/max(JUMP_THRESHOLD*100,1.0)*100,0,100)+0.20*probability+0.20*technical,0,100))
             if probability<MIN_JUMP_PROBABILITY or max(high_return*100,upside)<3.0:continue
             rows.append({"Symbol":r["Symbol"],"Current_Price":current,"Predicted_Close_1D":close,"Predicted_High_1D":high,"Expected_1D_Return":close_return*100,"Estimated_7D_Upside":upside,"Jump_Probability":probability,"Confidence":confidence,"TechnicalScore":technical,"JumpScore":score,"Target_Level":current*(1+JUMP_THRESHOLD),"Status":"OPEN","Remaining_Days":JUMP_HORIZON_DAYS})
         except Exception as exc:print(f"{r.get('Symbol','?')}: jump watchlist failed: {exc}")
@@ -84,9 +78,7 @@ def _attach_benchmarks_and_risk(candidates,data_map,cutoff_date,benchmark_histor
         df=data_map.get(r["Symbol"])
         if df is None or df.empty:vol_bucket.append("UNKNOWN");vol_pct.append(np.nan);continue
         valid=df[df.index<=pd.Timestamp(cutoff_date)];close=pd.to_numeric(valid.get("Close"),errors="coerce").dropna();ret=close.pct_change().dropna()*100;v=float(ret.tail(20).std()) if len(ret)>=5 else np.nan;vol_pct.append(v);vol_bucket.append("UNKNOWN" if not np.isfinite(v) else ("LOW" if v<VOLATILITY_LOW_PCT else ("HIGH" if v>=VOLATILITY_HIGH_PCT else "MEDIUM")))
-    out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=benchmark_return;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-benchmark_return
-    rank_col="FinalScore" if "FinalScore" in out.columns else "Score";out["CrossSectionRank"]=out.groupby("PriceBucket")[rank_col].rank(ascending=False,method="min");out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count");out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100
-    out["SectorRelative20D"]=0.0
+    out["VolatilityPct"]=vol_pct;out["VolatilityBucket"]=vol_bucket;out["BenchmarkExpectedReturn"]=benchmark_return;out["BenchmarkEdgePct"]=pd.to_numeric(out.get("Expected_Return",0),errors="coerce").fillna(0)-benchmark_return;rank_col="FinalScore" if "FinalScore" in out.columns else "Score";out["CrossSectionRank"]=out.groupby("PriceBucket")[rank_col].rank(ascending=False,method="min");out["CrossSectionCount"]=out.groupby("PriceBucket")["Symbol"].transform("count");out["CrossSectionPercentile"]=(1-(out["CrossSectionRank"]-1)/out["CrossSectionCount"].clip(lower=1))*100;out["SectorRelative20D"]=0.0
     if "SectorReturn20D" in out.columns:out["SectorRelative20D"]=pd.to_numeric(out["SectorReturn20D"],errors="coerce")-pd.to_numeric(out.groupby("Sector")["SectorReturn20D"].transform("median"),errors="coerce")
     return out
 
@@ -113,12 +105,9 @@ def _portfolio_payload():
             for _,r in df.sort_values("PnL").iterrows():
                 item={"Stock":r.Stock,"Quantity":int(r.Quantity),"Average_Price":"-" if pd.isna(r.Average_Price) else f"₹{r.Average_Price:,.2f}","Current_Price":"-" if pd.isna(r.Current_Price) else f"₹{r.Current_Price:,.2f}","Return_Pct":"-" if pd.isna(r.Return_Pct) else f"{r.Return_Pct:+.1f}%","AI_Target":"-" if pd.isna(r.AI_Target) else f"₹{r.AI_Target:,.2f}","Decision":str(r.get("Decision","WAIT / DATA UNAVAILABLE")),"Sell_Window":str(r.get("Sell_Window","-")),"Profit_Target":"-" if pd.isna(r.get("Profit_Target_Price")) else f"₹{float(r.Profit_Target_Price):,.2f}","Recommended_Qty":int(r.get("Recommended_Qty",0) or 0),"New_Average_Price":"-" if pd.isna(r.get("New_Average_Price")) else f"₹{float(r.New_Average_Price):,.2f}","Reason":str(r.get("Sell_Reason","-"))}
                 for h in HORIZONS:
-                    value=r.get(f"Horizon_{h}D",np.nan)
-                    item[f"Horizon_{h}D"]="-" if pd.isna(value) else f"{float(value):+.1f}%"
-                item["Horizon"]="-"
-                horizon_values=[(h,float(r.get(f"Horizon_{h}D"))) for h in HORIZONS if pd.notna(r.get(f"Horizon_{h}D",np.nan)) and float(r.get(f"Horizon_{h}D"))>=10]
-                if horizon_values:
-                    h,v=max(horizon_values,key=lambda x:(x[1],-x[0]));item["Horizon"]=f"{h}D";item["Sell_Window"]=str(r.get("Sell_Window", "-"))
+                    value=r.get(f"Horizon_{h}D",np.nan);item[f"Horizon_{h}D"]="-" if pd.isna(value) else f"{float(value):+.1f}%"
+                item["Horizon"]="-";horizon_values=[(h,float(r.get(f"Horizon_{h}D"))) for h in HORIZONS if pd.notna(r.get(f"Horizon_{h}D",np.nan)) and float(r.get(f"Horizon_{h}D"))>=10]
+                if horizon_values:h,v=max(horizon_values,key=lambda x:(x[1],-x[0]));item["Horizon"]=f"{h}D";item["Sell_Window"]=str(r.get("Sell_Window","-"))
                 s["Rows"].append(item)
                 if item["Decision"].startswith("SELL") or item["Decision"]=="SELL / PROFIT BOOK":s["SellAlerts"].append(item)
                 if item["Decision"]=="AVG":s["AveragePlans"].append(item)
@@ -129,8 +118,7 @@ def _portfolio_payload():
 def _send_existing_report(prediction_date):
     predictions=load_predictions(prediction_date)
     if predictions.empty:return False
-    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date);ipo=get_ipo_report();scan={"Universe":meta.get("StocksScanned",0),"Data":meta.get("DataStocks",0),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",0),"Selected":len(predictions)}
-    report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}),ipo=ipo);sent=send_telegram(report)
+    meta=_prediction_metadata(prediction_date);cutoff=meta.get("DataCutoff",prediction_date);jump_watchlist=load_jump_predictions(prediction_date);intraday=load_intraday_predictions(prediction_date);ipo=get_ipo_report();scan={"Universe":meta.get("StocksScanned",0),"Data":meta.get("DataStocks",0),"Liquid":meta.get("LiquidStocks",0),"AI":meta.get("AI",0),"Selected":len(predictions)};report=morning_report(prediction_date,cutoff,predictions,jump_watchlist,intraday,accuracy=model_report_metrics(),scan=scan,portfolio=_portfolio_payload(),regime=meta.get("Regime","-"),market_snapshot=meta.get("MarketSnapshot",{}),ipo=ipo);sent=send_telegram(report)
     if sent:mark_morning_report_sent(prediction_date)
     return sent
 
@@ -162,9 +150,13 @@ def run():
     if not candidate_rows:raise RuntimeError("Unable to generate predictions.")
     candidates=add_stage4_context(pd.DataFrame(candidate_rows),data_map,regime);candidates=candidates[candidates["PriceBucket"]!="OUT"].copy()
     if candidates.empty:raise RuntimeError("No candidates inside configured price buckets.")
-    candidates=score_candidates(candidates,regime);prediction_pool=_attach_horizons(candidates,data_map,cutoff_date);bundles={}
-    prediction_pool=add_prediction_uncertainty(prediction_pool,data_map,bundles);prediction_pool=score_candidates(prediction_pool,regime);prediction_pool=add_market_risk(prediction_pool,regime);prediction_pool=_attach_benchmarks_and_risk(prediction_pool,data_map,cutoff_date,benchmark_history)
-    selected=select_top_stocks(prediction_pool,top_n=PREDICTION_TOP_N,regime=regime,min_score=65.0,min_confidence=60.0,min_trade_confidence=60.0,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
+    candidates=score_candidates(candidates,regime);prediction_pool=_attach_horizons(candidates,data_map,cutoff_date);bundles={};prediction_pool=add_prediction_uncertainty(prediction_pool,data_map,bundles);prediction_pool=score_candidates(prediction_pool,regime);prediction_pool=add_market_risk(prediction_pool,regime);prediction_pool=_attach_benchmarks_and_risk(prediction_pool,data_map,cutoff_date,benchmark_history)
+    # IMPORTANT: prediction coverage is independent from BUY eligibility.
+    # A bearish regime may produce zero BUY candidates, but it must not reduce
+    # the morning prediction ledger from 10 valid forecasts to 1.
+    selected=select_prediction_set(prediction_pool,top_n=PREDICTION_TOP_N,max_per_bucket=MAX_PER_PRICE_BUCKET,regime=regime);selected=apply_final_intelligence(selected,regime=regime,breadth=float(snapshot.get("Breadth",{}).get("Score",50)),news=50);selected["PredictionDate"]=str(prediction_date);selected=_attach_current_ohlcv(selected,data_map,cutoff_date)
+    if len(selected)<min(PREDICTION_TOP_N,len(prediction_pool)):
+        raise RuntimeError(f"Prediction selection underfilled: {len(selected)} of {min(PREDICTION_TOP_N,len(prediction_pool))} valid candidates")
     metadata={"Stage":STAGE_NAME,"PredictionDate":str(prediction_date),"DataCutoff":str(cutoff_date),"ModelVariant":variant,"ModelVersion":MODEL_VERSION,"Regime":regime,"MarketSnapshot":snapshot,"BenchmarkSymbol":NIFTY_SYMBOL,"BenchmarkExpectedReturn5D":_benchmark_return(benchmark_history),"PriceBuckets":[">2500","1000-2499","500-999","250-499","100-249","50-99","10-49"],"MaxSelectedStocks":PREDICTION_TOP_N,"GlobalTopNCap":True,"PredictionCandidatePool":len(candidate_rows),"MultiHorizonTopN":PREDICTION_TOP_N,"MultiHorizons":HORIZONS,"FinalIntelligence":True,"TargetHitLevels":[1,2,3,5],"VolatilityBuckets":["LOW","MEDIUM","HIGH"],"CrossSectionalRanking":True,"SectorRelativeStrength":True,"AdaptiveThresholds":True,"Abstention":True,"Manifest":final_stage_manifest(),"SelectedStocks":selected["Symbol"].tolist(),"StocksScanned":scan_count,"DataStocks":len(raw_data),"PreScreen":len(candidate_symbols),"AI":len(prediction_symbols),"LiquidStocks":len(data_map)}
     save_predictions(selected,prediction_date,metadata);save_decisions(selected,prediction_date);update_learning_state(FINAL_LEARNING_STATE_FILE,{"date":str(prediction_date),"regime":regime,"selected":selected[[c for c in ["Symbol","PriceBucket","VolatilityBucket","VolatilityPct","CrossSectionPercentile","SectorRelative20D","BenchmarkEdgePct","RiskAdjustedReturn","FinalDecisionScore","Action","FinalRisk","CalibratedConfidence","PredictionUncertaintyPct","TargetHitProb_3_0Pct","DownsideHitProb_2Pct"] if c in selected.columns]].to_dict("records")})
     jump_watchlist=_jump_from_prediction_pool(prediction_pool)
