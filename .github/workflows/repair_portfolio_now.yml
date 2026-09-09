@@ -26,10 +26,14 @@ jobs:
               p.write_text(s)
           PY
       - name: Validate full regression suite
+        env:
+          PYTHONPATH: .
         run: |
           python -m compileall -q src
-          pytest -q tests/
+          python -m pytest -q tests/
       - name: Commit and push validated fix
+        env:
+          PYTHONPATH: .
         run: |
           git config user.name 'stocks-ai-predictor'
           git config user.email 'actions@github.com'
