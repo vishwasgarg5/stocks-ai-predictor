@@ -48,8 +48,18 @@ def prediction_exists(prediction_date):
     try:return _valid_prediction_ledger(pd.read_csv(path))
     except Exception:return False
 
-def morning_report_sent(prediction_date): return morning_report_path(prediction_date).exists()
-def mark_morning_report_sent(prediction_date):write_json(morning_report_path(prediction_date),{"PredictionDate":str(prediction_date),"ReportSent":True})
+def morning_report_sent(prediction_date):
+    """Return True only for a successfully versioned Telegram delivery marker."""
+    path=morning_report_path(prediction_date)
+    if not path.exists():return False
+    try:
+        data=pd.read_json(path,typ="series")
+        return bool(data.get("ReportSent") is True and data.get("DeliveryVersion")=="v2")
+    except Exception:return False
+
+def mark_morning_report_sent(prediction_date):
+    """Write a versioned marker so legacy markers cannot suppress retries."""
+    write_json(morning_report_path(prediction_date),{"PredictionDate":str(prediction_date),"ReportSent":True,"DeliveryVersion":"v2"})
 
 def save_predictions(df,prediction_date,metadata=None):
     metadata=dict(metadata or {});metadata.setdefault("PredictionDate",str(prediction_date));metadata.setdefault("ModelVersion",MODEL_VERSION);metadata.setdefault("Stage",STAGE_NAME);path=prediction_path(prediction_date)
@@ -78,72 +88,3 @@ def load_predictions(prediction_date):
     except Exception:return pd.DataFrame()
 def load_jump_predictions(prediction_date):path=jump_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
 def load_intraday_predictions(prediction_date):path=intraday_path(prediction_date);return pd.read_csv(path) if path.exists() else pd.DataFrame()
-def save_jump_predictions(df,prediction_date):path=jump_path(prediction_date);df.to_csv(path,index=False);return path
-def save_intraday_predictions(df,prediction_date):path=intraday_path(prediction_date);df.to_csv(path,index=False);return path
-
-def latest_prediction_date(on_or_before=None):
-    if on_or_before is not None:
-        exact=pd.Timestamp(on_or_before).date();return exact if prediction_path(exact).exists() else None
-    files=sorted(PREDICTIONS_DIR.glob("predictions_*.csv"));dates=[]
-    for path in files:
-        match=re.search(r"predictions_(\d{4}-\d{2}-\d{2})",path.name)
-        if match:dates.append(pd.Timestamp(match.group(1)).date())
-    return max(dates) if dates else None
-
-def evaluation_exists(market_date):return evaluation_path(market_date).exists()
-def save_evaluation(df,market_date):
-    path=evaluation_path(market_date);x=df.copy()
-    if x.empty or "Symbol" not in x.columns or "PredictionDate" not in x.columns:raise ValueError("Evaluation requires Symbol and PredictionDate")
-    if x["Symbol"].astype(str).duplicated().any():raise ValueError("Evaluation contains duplicate symbols")
-    if "Prediction_ID" not in x.columns:x["Prediction_ID"]=""
-    for pdate,idxs in x.groupby(x["PredictionDate"].astype(str)).groups.items():
-        canonical=load_predictions(pd.Timestamp(pdate).date())
-        if canonical.empty or "Prediction_ID" not in canonical.columns:raise ValueError(f"Missing canonical prediction ledger for {pdate}")
-        ids=canonical[["Symbol","Prediction_ID"]].drop_duplicates("Symbol").set_index("Symbol")["Prediction_ID"].to_dict()
-        for idx in idxs:
-            pid=ids.get(str(x.at[idx,"Symbol"]))
-            if not pid:raise ValueError(f"No canonical Prediction_ID for {x.at[idx,'Symbol']} on {pdate}")
-            x.at[idx,"Prediction_ID"]=pid
-    if x["Prediction_ID"].astype(str).str.lower().isin(["nan","none",""]).any() or x["Prediction_ID"].astype(str).str.len().lt(2).any():raise ValueError("Evaluation contains unbound Prediction_ID")
-    if x.duplicated(["Prediction_ID","Symbol"],keep=False).any():raise ValueError("Evaluation contains duplicate prediction lineage")
-    canonical=load_predictions(pd.Timestamp(str(x["PredictionDate"].iloc[0])).date());binding=canonical[["Symbol","Prediction_ID"]].set_index("Symbol")["Prediction_ID"].to_dict()
-    for _,r in x.iterrows():
-        if binding.get(str(r.Symbol))!=str(r.Prediction_ID):raise ValueError("Evaluation Prediction_ID does not bind to canonical prediction")
-    if path.exists():
-        try:
-            existing=pd.read_csv(path)
-            if not existing.empty:
-                if set(existing.get("Prediction_ID",pd.Series(dtype=str)).astype(str))!=set(x["Prediction_ID"].astype(str)):raise ValueError("Evaluation is immutable: Prediction_ID set differs")
-                return path
-        except ValueError:raise
-        except Exception as exc:raise ValueError(f"Existing evaluation unreadable: {exc}")
-    path.parent.mkdir(parents=True,exist_ok=True);x.to_csv(path,index=False);return path
-
-def append_daily_metrics(row):
-    if DAILY_METRICS_FILE.exists():df=pd.read_csv(DAILY_METRICS_FILE);df=df[df["MarketDate"].astype(str)!=str(row["MarketDate"])]
-    else:df=pd.DataFrame()
-    df=pd.concat([df,pd.DataFrame([row])],ignore_index=True);df.to_csv(DAILY_METRICS_FILE,index=False)
-
-def rebuild_stock_reliability():
-    frames=[]
-    for path in sorted(EVALUATIONS_DIR.glob("evaluation_*.csv")):
-        try:
-            df=pd.read_csv(path)
-            if not df.empty:frames.append(df)
-        except Exception:continue
-    if not frames:return
-    data=pd.concat(frames,ignore_index=True)
-    if "MarketDate" in data.columns:data=data.sort_values("MarketDate")
-    rows=[]
-    for symbol,group in data.groupby("Symbol"):
-        group=group.copy()
-        apes=[]
-        for target in ["Open","High","Low","Close"]:
-            col=f"APE_{target}"
-            if col in group.columns:apes.append(pd.to_numeric(group[col],errors="coerce").abs().mean())
-        close_series=pd.to_numeric(group.get("APE_Close",pd.Series(dtype=float)),errors="coerce").abs()
-        close_ape=float(close_series.mean()) if not close_series.dropna().empty else 3.0
-        recent_ape=float(close_series.tail(min(5,len(close_series))).mean()) if not close_series.tail(min(5,len(close_series))).dropna().empty else close_ape
-        direction=float(pd.to_numeric(group.get("DirectionCorrect",pd.Series(dtype=float)),errors="coerce").mean()*100) if "DirectionCorrect" in group else 50.0
-        rows.append({"Symbol":symbol,"Samples":len(group),"MAPE":float(sum(apes)/len(apes)) if apes else close_ape,"RecentMAPE":recent_ape,"MAPE_Open":float(pd.to_numeric(group.get("APE_Open",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Open" in group else close_ape,"MAPE_High":float(pd.to_numeric(group.get("APE_High",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_High" in group else close_ape,"MAPE_Low":float(pd.to_numeric(group.get("APE_Low",pd.Series(dtype=float)),errors="coerce").abs().mean()) if "APE_Low" in group else close_ape,"MAPE_Close":close_ape,"DirectionAccuracy":direction})
-    pd.DataFrame(rows).to_csv(STOCK_RELIABILITY_FILE,index=False)
