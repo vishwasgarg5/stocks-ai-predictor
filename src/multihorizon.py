@@ -1,4 +1,4 @@
-"""Robust multi-horizon forecasting through 365 trading days with explicit per-horizon status."""
+"""Multi-horizon forecasting with horizon-aware purged validation."""
 from __future__ import annotations
 
 import numpy as np
@@ -35,23 +35,36 @@ def _mape(y, p):
                                np.maximum(np.abs(np.asarray(y)), 1e-6))) * 100)
 
 
-def _train_target(work, features, target, horizon):
-    n = len(work)
-    split = max(60, int(n * 0.80))
-    split = min(split, n - 1)
+def _purged_split(n, horizon, validation_fraction=0.20):
+    """Return a chronological train/validation split purged by the target horizon.
 
-    # A 365-day forecast must not discard 365 observations from training.
-    # Keep a small fixed embargo to preserve chronological separation while
-    # retaining enough training data for long horizons.
-    embargo = min(10, max(0, split - 30))
-    train_end = split - embargo
+    A row at time t has a label based on t+h. Therefore training rows whose
+    labels reach into the validation interval must be removed. The purge is
+    horizon-aware rather than using a fixed arbitrary embargo.
+    """
+    if n < 100:
+        return None
+    split = max(60, int(n * (1.0 - validation_fraction)))
+    split = min(split, n - 10)
+    train_end = split - int(horizon)
     if train_end < 30:
-        train_end = 30
+        return None
+    val_end = n
+    if val_end - split < 10:
+        return None
+    return train_end, split, val_end
 
+
+def _train_target(work, features, target, horizon):
+    split_info = _purged_split(len(work), horizon)
+    if split_info is None:
+        raise ValueError(f"Insufficient samples for horizon-aware validation: h={horizon}, n={len(work)}")
+
+    train_end, split, val_end = split_info
     Xtr = work[features].iloc[:train_end]
-    Xv = work[features].iloc[split:]
+    Xv = work[features].iloc[split:val_end]
     ytr = work[target].iloc[:train_end]
-    yv = work[target].iloc[split:]
+    yv = work[target].iloc[split:val_end]
     if len(Xv) < 10 or len(Xtr) < 30:
         raise ValueError("Insufficient chronological validation data")
 
@@ -75,7 +88,11 @@ def _train_target(work, features, target, horizon):
         "validation_samples": len(yv),
         "samples": len(work),
         "horizon_days": horizon,
-        "validation_embargo": embargo,
+        "validation_embargo": int(horizon),
+        "validation_method": "chronological_purged_holdout",
+        "validation_train_end": str(work.index[train_end - 1].date()),
+        "validation_start": str(work.index[split].date()),
+        "validation_end": str(work.index[val_end - 1].date()),
     }
 
 
@@ -91,9 +108,8 @@ def train_horizon_models(df, cutoff_date):
         work["target_return"] = (x["Close"].shift(-h) / x["Close"] - 1) * 100
         work = work.replace([np.inf, -np.inf], np.nan).dropna()
 
-        # Need enough rows for training, validation and the horizon target.
-        # Do not impose an artificial 100+h threshold that blocks long horizons.
-        minimum = max(150, 120 + min(h, 60))
+        # Need enough history for the target, the horizon purge, and a useful holdout.
+        minimum = max(180, 80 + int(h) * 2)
         if len(work) < minimum:
             result["status"][h] = {
                 "Status": "INSUFFICIENT_DATA",
@@ -110,6 +126,8 @@ def train_horizon_models(df, cutoff_date):
                 "Status": "VALID",
                 "Samples": len(work),
                 "Minimum": minimum,
+                "ValidationMethod": "chronological_purged_holdout",
+                "EmbargoSessions": int(h),
             }
         except Exception as exc:
             result["status"][h] = {
