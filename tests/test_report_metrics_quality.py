@@ -6,7 +6,8 @@ import src.report_metrics as rm
 def test_confidence_calibration_detects_overconfidence():
     df = pd.DataFrame({
         "PredictionConfidence": [90, 90, 90, 90],
-        "APE_Close": [20, 20, 20, 20],
+        # 25% error means 75% observed accuracy, so ECE is 15 points.
+        "APE_Close": [25, 25, 25, 25],
     })
     out = rm._confidence_calibration(df)
     assert out["ConfidenceCalibration"] == "LOW EVIDENCE"
