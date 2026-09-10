@@ -9,58 +9,46 @@ from .multihorizon import train_horizon_models, predict_horizons
 
 
 def train_stock_bundle(df,symbol,cutoff_date,variant="A",train_horizons=False):
+    original_df=df
     supervised=prepare_supervised(df,cutoff_date)
     if len(supervised)<150:
-        # Morning scans use a short cache window for the full NSE universe. Only
-        # a prescreened candidate that actually reaches model training is allowed
-        # to expand to the long training history. This prevents a 5y download for
-        # thousands of stocks while preserving the 5y model requirement.
         try:
             expanded=download_symbol(symbol,period=HISTORY_PERIOD)
             if expanded is not None and not expanded.empty:
                 expanded=expanded[expanded.index<=pd.Timestamp(cutoff_date)]
                 expanded_supervised=prepare_supervised(expanded,cutoff_date)
                 if len(expanded_supervised)>len(supervised):
+                    original_df.attrs["expanded_history"]=expanded
                     df=expanded;supervised=expanded_supervised
         except Exception as exc:
             print(f"{symbol}: long-history expansion unavailable: {exc}")
     if len(supervised)<150: raise ValueError(f"{symbol}: only {len(supervised)} supervised rows")
-    features=get_feature_columns(); X=supervised[features]; target_bundles={}; validation_mape=[]; validation_error=[]
+    features=get_feature_columns();X=supervised[features];target_bundles={};validation_mape=[];validation_error=[]
     for target in TARGETS:
-        b=fit_target_ensemble(X,supervised[f"Target_{target}"],variant); target_bundles[target]=b; validation_mape.append(b["validation_mape"]); validation_error.append(b["validation_error"])
-    log_volume=np.log1p(supervised["Target_Volume"].clip(lower=0)); log_volume.name="LogVolume"
-    volume_bundle=fit_target_ensemble(X,log_volume,variant)
-    direction_bundle=fit_direction_model(X,supervised["Direction"],variant)
-    horizon_bundle=train_horizon_models(df,cutoff_date) if train_horizons else None
+        b=fit_target_ensemble(X,supervised[f"Target_{target}"],variant);target_bundles[target]=b;validation_mape.append(b["validation_mape"]);validation_error.append(b["validation_error"])
+    log_volume=np.log1p(supervised["Target_Volume"].clip(lower=0));log_volume.name="LogVolume";volume_bundle=fit_target_ensemble(X,log_volume,variant);direction_bundle=fit_direction_model(X,supervised["Direction"],variant);horizon_bundle=train_horizon_models(df,cutoff_date) if train_horizons else None
     return {"symbol":symbol,"variant":variant,"cutoff_date":str(pd.Timestamp(cutoff_date).date()),"features":features,"targets":target_bundles,"volume":volume_bundle,"direction":direction_bundle,"horizons":horizon_bundle,"validation_mape":float(np.mean(validation_mape)),"validation_error":float(np.mean(validation_error)),"direction_validation_accuracy":direction_bundle["validation_accuracy"],"training_samples":len(supervised)}
 
-
 def _enforce_ohlc_consistency(p):
-    p["High"]=max(float(p["High"]),float(p["Open"]),float(p["Close"])); p["Low"]=min(float(p["Low"]),float(p["Open"]),float(p["Close"])); return p
-
+    p["High"]=max(float(p["High"]),float(p["Open"]),float(p["Close"]));p["Low"]=min(float(p["Low"]),float(p["Open"]),float(p["Close"]));return p
 
 def predict_stock(df,bundle,cutoff_date):
     x=build_features(df)
-    if x.empty: raise ValueError("No features")
-    cutoff=pd.Timestamp(cutoff_date); x=x[x.index<=cutoff]; usable=x[bundle["features"]].dropna()
-    if usable.empty: raise ValueError("No usable latest feature row")
-    latest=usable.iloc[[-1]]; predictions={}; agreements=[]; dispersion=[]
+    if x.empty:raise ValueError("No features")
+    cutoff=pd.Timestamp(cutoff_date);x=x[x.index<=cutoff];usable=x[bundle["features"]].dropna()
+    if usable.empty:raise ValueError("No usable latest feature row")
+    latest=usable.iloc[[-1]];predictions={};agreements=[];dispersion=[]
     for target in TARGETS:
-        final_prediction,component_predictions=predict_ensemble(bundle["targets"][target],latest); value=float(final_prediction[0])
-        if not np.isfinite(value): raise ValueError(f"Non-finite {target} prediction")
-        predictions[target]=value; agreements.append(float(model_agreement(component_predictions,final_prediction)[0]))
-        component_values=np.asarray([float(v[0]) for v in component_predictions.values()],dtype=float)
-        dispersion.append(float(np.std(component_values)/max(abs(value),1e-8)*100))
-    log_volume,_=predict_ensemble(bundle["volume"],latest); predicted_volume=float(max(0.0,np.expm1(log_volume[0])))
-    if not np.isfinite(predicted_volume): raise ValueError("Non-finite Volume prediction")
-    predictions=_enforce_ohlc_consistency(predictions)
-    direction_model=bundle["direction"]["model"]; direction_label=int(direction_model.predict(latest)[0])
-    try: direction_probability=float(np.max(direction_model.predict_proba(latest)[0])*100)
-    except Exception: direction_probability=50.0
-    current_close=float(latest["Close"].iloc[0]); expected_return=predictions["Close"]/current_close-1
-    confidence=float(0.65*np.mean(agreements)+0.35*direction_probability)
+        final_prediction,component_predictions=predict_ensemble(bundle["targets"][target],latest);value=float(final_prediction[0])
+        if not np.isfinite(value):raise ValueError(f"Non-finite {target} prediction")
+        predictions[target]=value;agreements.append(float(model_agreement(component_predictions,final_prediction)[0]));component_values=np.asarray([float(v[0]) for v in component_predictions.values()],dtype=float);dispersion.append(float(np.std(component_values)/max(abs(value),1e-8)*100))
+    log_volume,_=predict_ensemble(bundle["volume"],latest);predicted_volume=float(max(0.0,np.expm1(log_volume[0])))
+    if not np.isfinite(predicted_volume):raise ValueError("Non-finite Volume prediction")
+    predictions=_enforce_ohlc_consistency(predictions);direction_model=bundle["direction"]["model"];direction_label=int(direction_model.predict(latest)[0])
+    try:direction_probability=float(np.max(direction_model.predict_proba(latest)[0])*100)
+    except Exception:direction_probability=50.0
+    current_close=float(latest["Close"].iloc[0]);expected_return=predictions["Close"]/current_close-1;confidence=float(0.65*np.mean(agreements)+0.35*direction_probability)
     return {"Current_Price":current_close,"Current_Volume":float(latest["Volume"].iloc[0]),"Pred_Open":predictions["Open"],"Pred_High":predictions["High"],"Pred_Low":predictions["Low"],"Pred_Close":predictions["Close"],"Pred_Volume":predicted_volume,"Expected_Return":expected_return*100,"Direction":{0:"DOWN",1:"NEUTRAL",2:"UP"}.get(direction_label,"NEUTRAL"),"Direction_Confidence":direction_probability,"Confidence":confidence,"EnsembleDispersionPct":float(np.mean(dispersion)) if dispersion else 0.0,"TechnicalScore":technical_score(df[df.index<=cutoff]),"ValidationMAPE":bundle["validation_mape"],"ValidationError":bundle["validation_error"],"DirectionValidationAccuracy":bundle["direction_validation_accuracy"]}
-
 
 def add_multihorizon_predictions(df,bundle,cutoff_date):
     if bundle.get("horizons") is None:return pd.DataFrame()
