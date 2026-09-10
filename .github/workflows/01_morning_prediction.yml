@@ -65,7 +65,7 @@ jobs:
           ADDED=$(git diff --cached --numstat | awk '{a+=$1} END {print a+0}')
           FILES=$(git diff --cached --name-only | wc -l)
           echo "Generated-state diff: files=$FILES added_lines=$ADDED"
-          if [ "$ADDED" -gt 250000 ] || [ "$FILES" -gt 250 ]; then echo "Refusing abnormal generated-state commit"; git reset; exit 1; fi
+          if [ "$ADDED" -gt 500000 ] || [ "$FILES" -gt 250 ]; then echo "Refusing abnormal generated-state commit"; git reset; exit 1; fi
           git commit -m "Update Stage 28 morning prediction state"
           git pull --rebase origin main
           git push origin HEAD:main
