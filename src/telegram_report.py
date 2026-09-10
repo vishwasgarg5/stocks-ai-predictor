@@ -122,7 +122,10 @@ def _jump(x):
  if x is None or x.empty: return ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
  rows=[]
  for _,r in x.head(5).iterrows():
-  cur,target=_num(r.get("Current_Price")),_num(r.get("Target_Level")); prob=_num(r.get("Jump_Probability"),0); rows.append([r.get("Symbol","-"),f"₹{_fmt(cur)}",f"₹{_fmt(target)}",_pct((target/cur-1)*100 if target and cur else None),f"{prob:.0f}%"])
+  cur,target=_num(r.get("Current_Price")),_num(r.get("Target_Level")); raw_prob=_num(r.get("Jump_Probability")); prob=raw_prob if raw_prob is not None and raw_prob>0 else None
+  if cur is None or target is None: continue
+  rows.append([r.get("Symbol","-"),f"₹{_fmt(cur)}",f"₹{_fmt(target)}",_pct((target/cur-1)*100),f"{prob:.0f}%" if prob is not None else "N/A"])
+ if not rows: return ["🔥 *JUMP WATCH — TOP 5*","No valid jump candidates."]
  return ["🔥 *JUMP WATCH — TOP 5*",*_table(["Stock","CMP","Target","Upside","Prob"],rows)]
 def _intraday(x):
  if x is None or x.empty: return ["⚡ *INTRADAY TOP 5*","No qualifying intraday setup."]
@@ -139,8 +142,17 @@ def _portfolio(p):
  rows=[]
  for x in p.get("Rows",[]):
   if not isinstance(x,dict): continue
-  target_pct=x.get("Portfolio_Target_Pct",x.get("Projected_Return_At_AI_Target")); target_status=str(x.get("Portfolio_Target_Status","") or ""); sell_window=x.get("Sell_Window",x.get("Sell_Window_Days","-"))
-  rows.append([x.get("Stock","-"),x.get("Quantity","-"),_decision(x.get("Decision")),f"₹{_fmt(x.get('Current_Price'))}",f"₹{_fmt(x.get('Average_Price'))}",f"{_fmt(target_pct,1)}%" if _num(target_pct) is not None else "-",f"{_fmt(x.get('Return_Pct'),1)}%" if _num(x.get('Return_Pct')) is not None else "-",_portfolio_horizon_status(x),target_status or "-",sell_window])
+  target_price=_num(x.get("Profit_Target_Price"))
+  target_pct=_num(x.get("Portfolio_Target_Pct"))
+  ai_target=_num(x.get("Projected_Return_At_AI_Target"))
+  target_status=str(x.get("Portfolio_Target_Status","") or "")
+  if target_pct is None and ai_target is not None: target_pct=ai_target
+  target_display=f"₹{_fmt(target_price)}" if target_price is not None else (f"{_fmt(target_pct,1)}%" if target_pct is not None else "N/A")
+  sell_window=x.get("Sell_Window",x.get("Sell_Window_Days","-"))
+  decision=_decision(x.get("Decision"))
+  # A HOLD without a valid target/recovery signal is rendered as REVIEW rather than implying safety.
+  if decision=="HOLD" and target_price is None and target_status and "CONFIRMED" not in target_status.upper(): decision="REVIEW"
+  rows.append([x.get("Stock","-"),x.get("Quantity","-"),decision,f"₹{_fmt(x.get('Current_Price'))}",f"₹{_fmt(x.get('Average_Price'))}",target_display,f"{_fmt(x.get('Return_Pct'),1)}%" if _num(x.get('Return_Pct')) is not None else "-",_portfolio_horizon_status(x),target_status or "-",sell_window])
  if not rows: return ["💼 *AI PORTFOLIO MANAGER*","Portfolio positions exist, but no renderable rows were produced."]
  return ["💼 *AI PORTFOLIO MANAGER*",*_table(["Stock","Qty","Decision","CMP","Avg","Target","Return","Horizon","Target Status","Sell Window"],rows,13)]
 def _evaluation_sections(e):
