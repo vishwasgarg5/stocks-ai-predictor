@@ -1,10 +1,12 @@
 name: Temporary regression repair
-on: push
+on:
+  push:
+    branches: [main]
 permissions:
   contents: write
 jobs:
   repair:
-    if: github.ref == 'refs/heads/main' && github.event.head_commit.message != 'Fix Stage 10 regression report contracts'
+    if: ${{ github.event.head_commit.message != 'Fix Stage 10 regression report contracts' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
