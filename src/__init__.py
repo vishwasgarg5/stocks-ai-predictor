@@ -1,6 +1,7 @@
 """Package bootstrap and incremental monthly market-data adapter."""
 from pathlib import Path
 from threading import RLock
+import os
 import pandas as pd
 from .config import DATA_DIR,HISTORY_PERIOD,MAX_UNIVERSE
 from . import market_data as _market_data
@@ -57,16 +58,15 @@ def _save_partitioned(symbol,df):
  with _LOCK:
   for month,g in x.groupby(x.Date.dt.to_period('M')):
    p=_PARTITION_DIR/f'{month.year:04d}-{month.month:02d}.csv';g=g.sort_values('Date');old=_read_partition(p)
-   if old.empty:
-    g.to_csv(p,index=False);_MEM[p]=g.copy();continue
+   if old.empty:g.to_csv(p,index=False);_MEM[p]=g.copy();continue
    osym=old[old.Symbol.str.upper()==str(symbol).upper()];new_dates=set(pd.to_datetime(g.Date).dt.date);old_dates=set(pd.to_datetime(osym.Date).dt.date)
-   if not old.empty and (not osym.empty) and min(new_dates)>max(old_dates) and not (new_dates&old_dates):
+   if not osym.empty and min(new_dates)>max(old_dates) and not (new_dates&old_dates):
     g.to_csv(p,mode='a',header=False,index=False);_MEM[p]=pd.concat([old,g],ignore_index=True);continue
    keep=old[old.Symbol.str.upper()!=str(symbol).upper()];merged=pd.concat([keep,g],ignore_index=True).drop_duplicates(['Symbol','Date'],keep='last').sort_values(['Symbol','Date']);merged.to_csv(p,index=False);_MEM[p]=merged.copy()
 
 def _save_cached_ohlcv(symbol,df):_save_partitioned(symbol,df)
 def _incremental_download_symbol(symbol,period=HISTORY_PERIOD,retries=2):
- start,end=_period_start(period);cached=_read_cached_ohlcv(symbol,period)
+ start,end=_period_start(period);cached=_market_data._read_cached_ohlcv(symbol,period) if hasattr(_market_data,'_read_cached_ohlcv') else _read_cached_ohlcv(symbol,period)
  try:
   if cached is None or cached.empty:fresh=_market_data._download_range(symbol,start=start,end=end,period=None,retries=retries)
   else:
@@ -78,7 +78,7 @@ def _incremental_download_symbol(symbol,period=HISTORY_PERIOD,retries=2):
     z=_market_data._download_range(symbol,start=b+pd.Timedelta(days=1),end=end,period=None,retries=retries)
     if z is not None and not z.empty:pieces.append(z)
    fresh=pd.concat(pieces)
-  fresh=_market_data.clean_ohlcv(fresh).drop_duplicates(keep='last').sort_index();_save_partitioned(symbol,fresh);return fresh[(fresh.index>=start)&(fresh.index<=end)]
+  fresh=_market_data.clean_ohlcv(fresh).drop_duplicates(keep='last').sort_index();(_market_data._save_cached_ohlcv if hasattr(_market_data,'_save_cached_ohlcv') else _save_cached_ohlcv)(symbol,fresh);return fresh[(fresh.index>=start)&(fresh.index<=end)]
  except (TypeError,AttributeError,KeyError) as e:raise RuntimeError(f'Programming error while updating {symbol}: {e}') from e
  except Exception as e:print(f'Market data update failed for {symbol}: {e}');return cached if cached is not None else None
 
