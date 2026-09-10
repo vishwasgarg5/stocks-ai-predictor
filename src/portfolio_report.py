@@ -41,32 +41,21 @@ def _next_trading_date(value,days=1):
     return d.isoformat()
 
 def _sell_plan(row,current_price,average_price,prediction_date):
-    """Build a deterministic sell target from the first reliable horizon.
-
-    A forecast must reach the configured minimum profit target before a dated
-    sell plan is emitted.  Low-confidence forecasts may still establish a
-    timing window, but their sell profit is capped at the minimum target.
-    """
-    try: avg=float(average_price)
-    except Exception: avg=np.nan
-    if not np.isfinite(avg) or avg<=0:
-        return 10.0, np.nan, "-", "-", "WAIT"
-    try: confidence=float(row.get("AI_Confidence",0) or 0)
-    except Exception: confidence=0.0
+    try:avg=float(average_price)
+    except Exception:avg=np.nan
+    if not np.isfinite(avg) or avg<=0:return TARGET_PROFIT_PCT,np.nan,"-","-","WAIT"
+    confidence=_num(row,"AI_Confidence",0)
     candidates=[]
     for horizon in HORIZONS:
         value=_num(row,f"Horizon_{horizon}D")
-        if np.isfinite(value) and value>=TARGET_PROFIT_PCT:
-            candidates.append((horizon,value))
-    if not candidates:
-        return TARGET_PROFIT_PCT, avg*(1+TARGET_PROFIT_PCT/100.0), "-", "-", "WAIT"
+        if np.isfinite(value) and value>=TARGET_PROFIT_PCT:candidates.append((horizon,value))
+    if not candidates:return TARGET_PROFIT_PCT,avg*(1+TARGET_PROFIT_PCT/100),"-","-","WAIT"
     horizon,forecast=candidates[0]
-    planned_profit=float(forecast) if confidence>=MIN_AI_CONFIDENCE else TARGET_PROFIT_PCT
-    planned_profit=max(TARGET_PROFIT_PCT,planned_profit)
-    price=avg*(1+planned_profit/100.0)
-    window=f"{horizon}D"
+    planned=float(forecast) if confidence>=MIN_AI_CONFIDENCE else TARGET_PROFIT_PCT
+    planned=max(TARGET_PROFIT_PCT,planned)
+    price=avg*(1+planned/100)
     date=_next_trading_date(prediction_date,horizon) if prediction_date else "-"
-    return planned_profit,price,window,date,"TARGET_DATE"
+    return planned,price,f"{horizon}D",date,"TARGET_DATE"
 
 def _num(row,name,default=np.nan):
     try:
@@ -127,6 +116,16 @@ def _latest_predictions():
     if "_lineage_date" in allp.columns and allp["_lineage_date"].notna().any():latest=str(allp["_lineage_date"].max().date())
     return allp,latest
 
+def _attach_predictions(portfolio):
+    """Attach the latest canonical prediction to each holding by normalized symbol."""
+    predictions,date=_latest_predictions()
+    if portfolio is None or portfolio.empty:return portfolio.copy() if isinstance(portfolio,pd.DataFrame) else pd.DataFrame(),date
+    out=portfolio.copy();out["_symbol_norm"]=out["Ticker"].map(_symbol)
+    if predictions is not None and not predictions.empty:
+        p=predictions.copy();p["_symbol_norm"]=p["Symbol"].map(_symbol);p=p.drop_duplicates("_symbol_norm",keep="last")
+        out=out.merge(p,on="_symbol_norm",how="left",suffixes=("","_prediction"))
+    return out,date
+
 def _forecast_return(row):return [(h,_num(row,f"Horizon_{h}D")) for h in HORIZONS if np.isfinite(_num(row,f"Horizon_{h}D"))]
 
 def _decision(current,avg,target,confidence,forecasts):
@@ -141,7 +140,7 @@ def _decision(current,avg,target,confidence,forecasts):
     if not np.isfinite(c) or not np.isfinite(a) or a<=0:return "WAIT","NO PRICE / COST DATA"
     if not np.isfinite(t):return "HOLD","AI PREDICTION UNAVAILABLE"
     profit_target=a*(1+TARGET_PROFIT_PCT/100.0)
-    if c>=profit_target:return "SELL","10% profit target reached"
+    if c>=profit_target-1e-9:return "SELL","10% profit target reached"
     if t>=profit_target:
         strong=sum(1 for _,v in (forecasts or []) if np.isfinite(v) and v>=TARGET_PROFIT_PCT)
         return ("HOLD","MULTI_HORIZON_CONFIRMED recovery") if strong>=2 and conf>=MIN_AI_CONFIDENCE else ("HOLD","AI recovery target remains above cost")
@@ -184,8 +183,10 @@ def _plan_row(row,pred,prediction_date):
     if pd.isna(avg) and current is not None and pd.notna(reported_return) and float(reported_return)!=-100:avg=current/(1+float(reported_return)/100)
     target=_num(pred,"Pred_Close") if pred is not None else np.nan;confidence=_num(pred,"CalibratedConfidence",_num(pred,"Confidence",0)) if pred is not None else 0;direction=str(pred.get("Direction","-") if pred is not None else "-");forecasts=_forecast_return(pred) if pred is not None else []
     invested=qty*float(avg) if pd.notna(avg) else 0.;value=qty*current if current is not None else 0.;pnl=value-invested;ret=pnl/invested*100 if invested else np.nan;profit_target=float(avg)*(1+TARGET_PROFIT_PCT/100) if pd.notna(avg) else np.nan;recovery=((float(avg)-current)/float(avg)*100) if current is not None and pd.notna(avg) and float(avg) else np.nan
-    decision,reason=_decision(current,avg,target,confidence,forecasts);required_recovery=((float(avg)/float(current)-1)*100) if current is not None and np.isfinite(current) and current>0 and pd.notna(avg) else np.nan;valid_forecasts=[(h,float(v)) for h,v in forecasts if np.isfinite(v)];recovery_hits=[(h,v) for h,v in valid_forecasts if np.isfinite(required_recovery) and v>=required_recovery];recovery_horizon=min((h for h,_ in recovery_hits),default=np.nan);max_forecast=max((v for _,v in valid_forecasts),default=np.nan);recovery_probability=float(np.clip(50+50*(max_forecast/required_recovery),0,95)) if np.isfinite(required_recovery) and required_recovery>0 and np.isfinite(max_forecast) else (95.0 if current>=avg else 0.0);profit_required=((float(avg)*(1+TARGET_PROFIT_PCT/100))/float(current)-1)*100 if current is not None and np.isfinite(current) and current>0 and pd.notna(avg) else np.nan;profit_probability=float(np.clip(50+50*(max_forecast/profit_required),0,95)) if np.isfinite(profit_required) and profit_required>0 and np.isfinite(max_forecast) else (95.0 if current>=profit_target else 0.0);projected=(target/float(avg)-1)*100 if np.isfinite(target) and pd.notna(avg) and float(avg) else np.nan
-    out={"Stock":_symbol(ticker),"Ticker":ticker,"Quantity":int(qty),"Average_Price":avg,"Current_Price":current,"Invested_Value":invested,"Current_Value":value,"PnL":pnl,"Current_PnL_INR":pnl,"Return_Pct":ret,"AI_Target":target,"AI_Confidence":confidence,"AI_Direction":direction,"Decision":decision,"Sell_Window":"NOW" if decision in {"SELL","REDUCE"} else ("WATCH" if np.isfinite(target) else "NO AI DATA"),"Profit_Target_Price":profit_target,"Sell_Target_Price":target,"Recommended_Qty":0,"New_Average_Price":avg,"Projected_Return_At_AI_Target":projected,"Recovery_Gap_Pct":recovery,"Recovery_Probability":recovery_probability,"Recovery_Horizon_Days":recovery_horizon,"Profit_Target_Probability":profit_probability,"Sell_Reason":reason,"PredictionDate":prediction_date or "-","PriceSource":source}
+    decision,reason=_decision(current,avg,target,confidence,forecasts)
+    planned_profit,sell_target,sell_window,sell_date,sell_status=_sell_plan(pred if pred is not None else {},current,avg,prediction_date)
+    required_recovery=((float(avg)/float(current)-1)*100) if current is not None and np.isfinite(current) and current>0 and pd.notna(avg) else np.nan;valid_forecasts=[(h,float(v)) for h,v in forecasts if np.isfinite(v)];recovery_hits=[(h,v) for h,v in valid_forecasts if np.isfinite(required_recovery) and v>=required_recovery];recovery_horizon=min((h for h,_ in recovery_hits),default=np.nan);max_forecast=max((v for _,v in valid_forecasts),default=np.nan);recovery_probability=float(np.clip(50+50*(max_forecast/required_recovery),0,95)) if np.isfinite(required_recovery) and required_recovery>0 and np.isfinite(max_forecast) else (95.0 if current>=avg else 0.0);profit_required=((float(avg)*(1+TARGET_PROFIT_PCT/100))/float(current)-1)*100 if current is not None and np.isfinite(current) and current>0 and pd.notna(avg) else np.nan;profit_probability=float(np.clip(50+50*(max_forecast/profit_required),0,95)) if np.isfinite(profit_required) and profit_required>0 and np.isfinite(max_forecast) else (95.0 if current>=profit_target else 0.0);projected=(target/float(avg)-1)*100 if np.isfinite(target) and pd.notna(avg) and float(avg) else np.nan
+    out={"Stock":_symbol(ticker),"Ticker":ticker,"Quantity":int(qty),"Average_Price":avg,"Current_Price":current,"Invested_Value":invested,"Current_Value":value,"PnL":pnl,"Current_PnL_INR":pnl,"Return_Pct":ret,"AI_Target":target,"AI_Confidence":confidence,"AI_Direction":direction,"Decision":decision,"Sell_Window":sell_window if sell_status=="TARGET_DATE" else ("NOW" if decision in {"SELL","REDUCE"} else ("WATCH" if np.isfinite(target) else "NO AI DATA")),"Profit_Target_Price":profit_target,"Sell_Target_Price":sell_target if np.isfinite(sell_target) else target,"Recommended_Qty":0,"New_Average_Price":avg,"Projected_Return_At_AI_Target":projected,"Recovery_Gap_Pct":recovery,"Recovery_Probability":recovery_probability,"Recovery_Horizon_Days":recovery_horizon,"Profit_Target_Probability":profit_probability,"Sell_Reason":f"{reason}; sell {sell_status}" if sell_status else reason,"PredictionDate":prediction_date or "-","PriceSource":source}
     for h in HORIZONS:out[f"Horizon_{h}D"]=_num(pred,f"Horizon_{h}D") if pred is not None else np.nan
     return out
 
