@@ -1,13 +1,29 @@
 """Daily prediction API: next-session OHLCV plus optional multi-horizon forecasts."""
 import numpy as np
 import pandas as pd
+from .config import HISTORY_PERIOD
 from .features import get_feature_columns, prepare_supervised, build_features, technical_score
 from .models import TARGETS, fit_target_ensemble, fit_direction_model, predict_ensemble, model_agreement
+from .market_data import download_symbol
 from .multihorizon import train_horizon_models, predict_horizons
 
 
 def train_stock_bundle(df,symbol,cutoff_date,variant="A",train_horizons=False):
     supervised=prepare_supervised(df,cutoff_date)
+    if len(supervised)<150:
+        # Morning scans use a short cache window for the full NSE universe. Only
+        # a prescreened candidate that actually reaches model training is allowed
+        # to expand to the long training history. This prevents a 5y download for
+        # thousands of stocks while preserving the 5y model requirement.
+        try:
+            expanded=download_symbol(symbol,period=HISTORY_PERIOD)
+            if expanded is not None and not expanded.empty:
+                expanded=expanded[expanded.index<=pd.Timestamp(cutoff_date)]
+                expanded_supervised=prepare_supervised(expanded,cutoff_date)
+                if len(expanded_supervised)>len(supervised):
+                    df=expanded;supervised=expanded_supervised
+        except Exception as exc:
+            print(f"{symbol}: long-history expansion unavailable: {exc}")
     if len(supervised)<150: raise ValueError(f"{symbol}: only {len(supervised)} supervised rows")
     features=get_feature_columns(); X=supervised[features]; target_bundles={}; validation_mape=[]; validation_error=[]
     for target in TARGETS:
