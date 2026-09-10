@@ -3,7 +3,7 @@ from pathlib import Path
 from threading import RLock
 import os
 import pandas as pd
-from .config import DATA_DIR,HISTORY_PERIOD,MAX_UNIVERSE
+from .config import DATA_DIR,HISTORY_PERIOD,SCAN_PERIOD,PRESCREEN_N,MAX_UNIVERSE
 from . import market_data as _market_data
 _PARTITION_DIR=DATA_DIR/'stage2'/'market_data';_LEGACY_DIR=DATA_DIR/'stage2'/'ohlcv';_LOCK=RLock();_MEM={}
 
@@ -66,7 +66,7 @@ def _save_partitioned(symbol,df):
 
 def _save_cached_ohlcv(symbol,df):_save_partitioned(symbol,df)
 def _incremental_download_symbol(symbol,period=HISTORY_PERIOD,retries=2):
- start,end=_period_start(period);cached=_market_data._read_cached_ohlcv(symbol,period) if hasattr(_market_data,'_read_cached_ohlcv') else _read_cached_ohlcv(symbol,period)
+ start,end=_period_start(period);cached=_read_cached_ohlcv(symbol,period)
  try:
   if cached is None or cached.empty:fresh=_market_data._download_range(symbol,start=start,end=end,period=None,retries=retries)
   else:
@@ -75,10 +75,10 @@ def _incremental_download_symbol(symbol,period=HISTORY_PERIOD,retries=2):
     z=_market_data._download_range(symbol,start=start,end=a,period=None,retries=retries)
     if z is not None and not z.empty:pieces.append(z)
    if b<end:
-    z=_market_data._download_range(symbol,start=b+pd.Timedelta(days=1),end=end,period=None,retries=retries)
+    z=_market_data._download_range(symbol,start=b+pd.Timedelta(days=1),end=end,retries=retries)
     if z is not None and not z.empty:pieces.append(z)
    fresh=pd.concat(pieces)
-  fresh=_market_data.clean_ohlcv(fresh).drop_duplicates(keep='last').sort_index();(_market_data._save_cached_ohlcv if hasattr(_market_data,'_save_cached_ohlcv') else _save_cached_ohlcv)(symbol,fresh);return fresh[(fresh.index>=start)&(fresh.index<=end)]
+  fresh=_market_data.clean_ohlcv(fresh).drop_duplicates(keep='last').sort_index();_save_cached_ohlcv(symbol,fresh);return fresh[(fresh.index>=start)&(fresh.index<=end)]
  except (TypeError,AttributeError,KeyError) as e:raise RuntimeError(f'Programming error while updating {symbol}: {e}') from e
  except Exception as e:print(f'Market data update failed for {symbol}: {e}');return cached if cached is not None else None
 
@@ -88,10 +88,13 @@ def _bounded_download_many(symbols,period=HISTORY_PERIOD,workers=8):
   s=str(s).strip().upper()
   if s and s not in seen:seen.add(s);unique.append(s)
   if len(unique)>=int(MAX_UNIVERSE):break
+ # Full-NSE scans use a short window. Long history is expanded only when a
+ # prescreened candidate actually enters model training.
+ effective_period=SCAN_PERIOD if len(unique)>int(PRESCREEN_N) and str(period)==str(HISTORY_PERIOD) else period
  from concurrent.futures import ThreadPoolExecutor,as_completed
  results={};failures={}
  with ThreadPoolExecutor(max_workers=min(max(1,int(workers)),8)) as pool:
-  fs={pool.submit(_incremental_download_symbol,s,period,2):s for s in unique}
+  fs={pool.submit(_incremental_download_symbol,s,effective_period,2):s for s in unique}
   for f in as_completed(fs):
    s=fs[f]
    try:
@@ -102,7 +105,7 @@ def _bounded_download_many(symbols,period=HISTORY_PERIOD,workers=8):
     failures[s]=str(e)
     if 'Programming error' in str(e):raise
    except Exception as e:failures[s]=str(e)
- print(f'Repository-cache data available for {len(results)}/{len(unique)} stocks; failures={len(failures)}')
+ print(f'Repository-cache data available for {len(results)}/{len(unique)} stocks; failures={len(failures)}; period={effective_period}')
  return results
 
 _market_data._read_cached_ohlcv=_read_cached_ohlcv;_market_data._save_cached_ohlcv=_save_cached_ohlcv;_market_data.download_symbol=_incremental_download_symbol;_market_data.download_many=_bounded_download_many
