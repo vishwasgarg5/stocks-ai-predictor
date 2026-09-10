@@ -23,8 +23,8 @@ def test_core_modules_import():
     assert not failures,"Stage 28 import failures:\n"+"\n".join(failures)
 def test_config_is_stage28():
     from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS,PRICE_BUCKET_NAMES,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,PREDICTION_TOP_N
-    assert MODEL_VERSION.startswith("stage28") and STAGE_NAME.startswith("Stage 28") and HISTORY_PERIOD=="5y" and TOP_N==10 and PREDICTION_TOP_N==10 and MAX_UNIVERSE==750 and tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)
-    assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_PRICE_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
+    assert MODEL_VERSION.startswith("stage28") and STAGE_NAME.startswith("Stage 28") and HISTORY_PERIOD=="5y" and TOP_N==10 and PREDICTION_TOP_N==10 and MAX_UNIVERSE==3000 and tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)
+    assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
     for c in ["Open","High","Low","Close","Volume"]: df[f"Target_{c}"]=df[c].shift(-1)
