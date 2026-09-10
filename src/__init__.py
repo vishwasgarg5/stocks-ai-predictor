@@ -8,7 +8,6 @@ from . import market_data as _market_data
 from .config import MAX_UNIVERSE, DATA_DIR
 from .utils import price_bucket as canonical_price_bucket, clean_ohlcv
 import pandas as _pd
-from pathlib import Path as _Path
 
 _PARTITION_DIR = DATA_DIR / "stage2" / "market_data"
 _PARTITION_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,8 +39,7 @@ def _read_partition(path):
         if "Symbol" not in df.columns or "Date" not in df.columns:
             return _pd.DataFrame()
         df["Symbol"] = df["Symbol"].astype(str).str.upper()
-        df = df.set_index("Date")
-        return clean_ohlcv(df)
+        return df
     except Exception as exc:
         print(f"Partition read failed {path}: {exc}")
         return _pd.DataFrame()
@@ -58,9 +56,11 @@ def _read_partitioned_symbol(symbol, start=None, end=None):
     while cur <= end:
         df = _read_partition(_partition_path(cur))
         if not df.empty:
-            df = df[df["Symbol"] == symbol]
+            df = df[df["Symbol"] == symbol].copy()
             if not df.empty:
-                frames.append(df.drop(columns=["Symbol"], errors="ignore"))
+                df["Date"] = _pd.to_datetime(df["Date"])
+                df = df.set_index("Date").drop(columns=["Symbol"], errors="ignore")
+                frames.append(clean_ohlcv(df))
         cur = cur + _pd.DateOffset(months=1)
     if not frames:
         return _pd.DataFrame()
@@ -81,34 +81,22 @@ def _read_legacy_symbol(symbol):
         return _pd.DataFrame()
 
 
-def _write_partitioned(frames):
-    valid = [clean_ohlcv(x) for x in frames if x is not None and not x.empty]
-    valid = [x for x in valid if not x.empty]
-    if not valid:
-        return
-    combined = _pd.concat(valid).sort_index()
-    combined = combined[~combined.index.duplicated(keep="last")]
-    combined["Symbol"] = [getattr(x, "_cache_symbol", "") for x in []]
-
-
 def _save_partitioned(symbol, df):
     if df is None or df.empty:
         return
     symbol = _market_data.normalize_symbol(symbol)
     out = clean_ohlcv(df).sort_index()
     out = out[~out.index.duplicated(keep="last")].copy()
-    out["Symbol"] = symbol
     out.index.name = "Date"
     for (year, month), chunk in out.groupby([out.index.year, out.index.month]):
         path = _PARTITION_DIR / f"{int(year):04d}-{int(month):02d}.csv"
         old = _read_partition(path)
         if not old.empty:
             old = old[old["Symbol"] != symbol].copy()
-            old["Symbol"] = old.get("Symbol", "")
-        old2 = old.reset_index() if not old.empty else _pd.DataFrame()
         new2 = chunk.reset_index()
-        if not old2.empty:
-            merged = _pd.concat([old2, new2], ignore_index=True)
+        new2["Symbol"] = symbol
+        if not old.empty:
+            merged = _pd.concat([old, new2], ignore_index=True)
         else:
             merged = new2
         merged["Symbol"] = merged["Symbol"].astype(str).str.upper()
@@ -126,7 +114,6 @@ def _read_cached_ohlcv(symbol):
         return cached.sort_index()
     legacy = _read_legacy_symbol(symbol)
     if not legacy.empty:
-        # One-time migration. Future runs read the partitioned cache.
         _save_partitioned(symbol, legacy)
         return legacy.sort_index()
     return _pd.DataFrame()
