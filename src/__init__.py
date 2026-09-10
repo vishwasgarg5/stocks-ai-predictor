@@ -56,8 +56,8 @@ def _read_partition(path):
             df = df[["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Date"])
             _PARTITION_MEMORY[path] = df.copy()
             return df
-        except Exception:
-            return _empty_partition()
+        except Exception as exc:
+            raise RuntimeError(f"Unable to read market-data partition {path}: {exc}") from exc
 
 
 def _read_partitioned_symbol(symbol, start=None, end=None):
@@ -88,12 +88,12 @@ def _read_legacy_symbol(symbol):
         return None
     try:
         return _market_data.clean_ohlcv(pd.read_csv(path, index_col=0, parse_dates=True))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f"Unable to read legacy cache for {symbol}: {exc}") from exc
 
 
-def _read_cached_ohlcv(symbol):
-    start, end = _period_start()
+def _read_cached_ohlcv(symbol, period=HISTORY_PERIOD):
+    start, end = _period_start(period)
     cached = _read_partitioned_symbol(symbol, start, end)
     if cached is not None and not cached.empty:
         return cached
@@ -102,7 +102,7 @@ def _read_cached_ohlcv(symbol):
         try:
             _save_partitioned(symbol, legacy)
         except Exception:
-            pass
+            raise
         return legacy[(legacy.index >= start) & (legacy.index <= end)]
     return None
 
@@ -137,7 +137,7 @@ def _save_cached_ohlcv(symbol, df):
 
 def _incremental_download_symbol(symbol, period=HISTORY_PERIOD, retries=2):
     start, end = _period_start(period)
-    cached = _read_cached_ohlcv(symbol)
+    cached = _read_cached_ohlcv(symbol, period)
     try:
         if cached is None or cached.empty:
             fresh = _market_data._download_range(symbol, start=start, end=end, period=None, retries=retries)
@@ -155,8 +155,11 @@ def _incremental_download_symbol(symbol, period=HISTORY_PERIOD, retries=2):
                     pieces.append(newer)
             fresh = pd.concat(pieces)
         fresh = _market_data.clean_ohlcv(fresh)
+        fresh = fresh[~fresh.index.duplicated(keep="last")]
         _save_partitioned(symbol, fresh)
         return fresh[(fresh.index >= start) & (fresh.index <= end)]
+    except (TypeError, AttributeError, KeyError) as exc:
+        raise RuntimeError(f"Programming error while updating {symbol}: {exc}") from exc
     except Exception as exc:
         print(f"Market data update failed for {symbol}: {exc}")
         return cached if cached is not None else None
@@ -173,6 +176,7 @@ def _bounded_download_many(symbols, period=HISTORY_PERIOD, workers=8):
             break
     from concurrent.futures import ThreadPoolExecutor, as_completed
     results = {}
+    failures = {}
     with ThreadPoolExecutor(max_workers=min(max(1, int(workers)), 8)) as pool:
         futures = {pool.submit(_incremental_download_symbol, s, period, 2): s for s in unique}
         for future in as_completed(futures):
@@ -181,8 +185,17 @@ def _bounded_download_many(symbols, period=HISTORY_PERIOD, workers=8):
                 data = future.result()
                 if data is not None and not data.empty:
                     results[symbol] = data
+                else:
+                    failures[symbol] = "NO_DATA"
+            except RuntimeError as exc:
+                failures[symbol] = str(exc)
+                if "Programming error" in str(exc):
+                    raise
             except Exception as exc:
-                print(f"Market data failed for {symbol}: {exc}")
+                failures[symbol] = str(exc)
+    print(f"Repository-cache data available for {len(results)}/{len(unique)} stocks; failures={len(failures)}")
+    if failures and len(failures) <= 10:
+        print("Market-data failures: " + "; ".join(f"{s}:{e}" for s, e in failures.items()))
     return results
 
 
