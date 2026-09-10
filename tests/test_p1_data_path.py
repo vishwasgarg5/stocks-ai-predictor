@@ -43,12 +43,12 @@ def test_five_year_cache_path_requests_only_missing_ranges(monkeypatch):
     monkeypatch.setattr(md, "_save_cached_ohlcv", lambda symbol, df: None)
     ranges = []
 
-    def fake_range(ticker, start=None, end=None, period=None):
-        ranges.append((start, end, period))
+    def fake_range(ticker, start=None, end=None, period=None, retries=2):
+        ranges.append((start, end, period, retries))
         return _valid_frame()
 
     monkeypatch.setattr(md, "_download_range", fake_range)
     src._incremental_download_symbol("TEST", "5y", retries=0)
     assert ranges
-    assert all(period is None for _, _, period in ranges)
-    assert any(start is not None for start, _, _ in ranges)
+    assert all(period is None for _, _, period, _ in ranges)
+    assert any(start is not None for start, _, _, _ in ranges)
