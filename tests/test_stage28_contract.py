@@ -27,5 +27,5 @@ def test_stage28_contract_defaults_pass():
 def test_stage28_manifest_is_machine_readable():
     data = manifest()
     assert data["Stage"] == "Stage 28"
-    assert data["Version"] == "stage28-v1.0"
+    assert data["Version"] == "stage28-v1.1"
     assert data["PredictionHorizonsDays"][-1] == 365
