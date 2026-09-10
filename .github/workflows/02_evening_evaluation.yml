@@ -19,12 +19,13 @@ env:
 jobs:
   evening:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
-      - name: Checkout
+      - name: Checkout production branch
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          ref: main
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -75,4 +76,4 @@ jobs:
           if git diff --cached --quiet; then echo "No generated state changes."; exit 0; fi
           git commit -m "Update Stage 28 evening evaluation state"
           git pull --rebase origin main
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:main
