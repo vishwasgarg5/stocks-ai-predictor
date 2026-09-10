@@ -1,0 +1,50 @@
+name: Temporary regression repair
+on: push
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: github.ref == 'refs/heads/main' && github.event.head_commit.message != 'Fix Stage 10 regression report contracts'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Patch report regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('src/telegram_report.py'); s=p.read_text()
+          old="raw=_decision(x.get('Decision'));ret=_num(x.get('Return_Pct'));c=_num(x.get('Current_Price'));a=_num(x.get('Average_Price'));t=_num(x.get('Profit_Target_Price')) or _num(x.get('AI_Target'));win=x.get('Sell_Window',x.get('Sell_Window_Days','-'));plan=x.get('New_Average_Price','-')"
+          new="raw=_decision(x.get('Decision'));ret=_num(x.get('Return_Pct'));c=_num(x.get('Current_Price'));a=_num(x.get('Average_Price'));target_pct=_num(x.get('Portfolio_Target_Pct'));t=_num(x.get('Profit_Target_Price')) or _num(x.get('AI_Target'));target_display=f'{target_pct:.1f}%' if target_pct is not None else (f'₹{_fmt(t)}' if t is not None else 'N/A');win=x.get('Sell_Window',x.get('Sell_Window_Days','-'));plan=x.get('New_Average_Price','-')"
+          assert old in s
+          s=s.replace(old,new).replace("f'₹{_fmt(t)}' if t is not None else 'N/A',_pct(ret)","target_display,_pct(ret)")
+          s=s.replace("No valid prediction candidates.","No high-confidence setup today.")
+          s=s.replace("status='N/A' if len(valid)<3 else ('🟢 BULLISH' if sum(x>0 for x in valid)/len(valid)>=2/3 else '🟡 MIXED' if sum(x>0 for x in valid)/len(valid)>=1/3 else '🔴 WEAK')","status='N/A' if len(valid)<3 else ('CONFIRMED 🟢 BULLISH' if sum(x>0 for x in valid)/len(valid)>=2/3 else '🟡 MIXED' if sum(x>0 for x in valid)/len(valid)>=1/3 else '🔴 WEAK')")
+          pattern=r"def evening_report\(market_date,evaluation,metrics,retraining,\*\*kwargs\):.*?\ndef morning_report\(prediction_date,cutoff_date,selected,jump_watchlist,intraday,\*\*kwargs\):"
+          replacement='''def evening_report(market_date,evaluation,metrics,retraining,**kwargs):
+ metrics,retraining=metrics or {},retraining or {}
+ bucket=kwargs.get("bucket_metrics",{}) or {}
+ bucket_lines=["📦 *BUCKET ACCURACY*"]+([f"{_BUCKET_LABELS.get(str(k),str(k))}: {_num(v,0):.1f}%" for k,v in bucket.items()] if bucket else ["No bucket metrics available."])
+ accuracy=kwargs.get("accuracy",{}) or {};scan=kwargs.get("scan",{}) or {}
+ return '\\n'.join([f'🌙 *AI NSE EVENING REPORT*\\n📅 {market_date}\\n⚙️ {MODEL_VERSION}',_SECTION,*_evaluation_sections(evaluation),_SECTION,*bucket_lines,_SECTION,'📈 *MODEL ACCURACY*',f"Samples: {int(_num(metrics.get('Samples'),0) or 0)} | Overall MAPE: {_accuracy(metrics.get('OverallMAPE'))} | Close MAPE: {_accuracy(metrics.get('CloseMAPE'))}",f"Direction accuracy: {_accuracy(metrics.get('DirectionAccuracy'))}",f"Previous accuracy: {_accuracy(accuracy.get('PreviousAccuracy'))} | Current accuracy: {_accuracy(accuracy.get('CurrentAccuracy'))}",_scan(scan),_SECTION,'🧠 *MODEL LEARNING*',f"Retrained: {'YES' if retraining.get('Retrained',False) else 'NO'} | Decision: {retraining.get('Decision','-')}",_SECTION,*_portfolio(kwargs.get('portfolio',{}))])
+
+def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):'''
+          s,n=re.subn(pattern,replacement,s,flags=re.S); assert n==1
+          p.write_text(s)
+          PY
+      - name: Run targeted regression tests
+        run: python -m pip install -r requirements.txt && python -m pytest -q tests/test_portfolio_report_schema.py tests/test_portfolio_telegram_report.py tests/test_stage10_5.py tests/test_stage10_5_trade_gating.py tests/test_stage10_integration.py tests/test_telegram_report_hardening.py
+      - name: Commit repair and remove temporary workflow
+        run: |
+          rm -f .github/workflows/99_patch_telegram_regressions.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/telegram_report.py .github/workflows/99_patch_telegram_regressions.yml
+          git commit -m "Fix Stage 10 regression report contracts"
+          git push origin HEAD:main
