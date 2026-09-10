@@ -33,7 +33,9 @@ def horizon_alignment(row):
     except:pass
  if not v:return 50.
  d=str(row.get('Direction','NEUTRAL')).upper();a=sum(x>0 for x in v) if d=='UP' else sum(x<0 for x in v) if d=='DOWN' else sum(abs(x)<=1.5 for x in v);return 100*a/len(v)
-def calculate_trade_confidence(r):return clamp(.30*float(r.get('Confidence',50))+.15*float(r.get('Direction_Confidence',50))+.20*float(r.get('ReliabilityScore',50))+.20*horizon_alignment(r)+.15*float(r.get('UncertaintyScore',50)))
+def calculate_trade_confidence(r):
+ alignment=direction_return_alignment(r.get('Direction','NEUTRAL'),r.get('Expected_Return',0))
+ return clamp(.25*float(r.get('Confidence',50))+.15*float(r.get('Direction_Confidence',50))+.20*float(r.get('ReliabilityScore',50))+.20*horizon_alignment(r)+.10*float(r.get('UncertaintyScore',50))+.10*alignment)
 def calculate_score(r,regime):return clamp(.20*float(r.get('TechnicalScore',50))+.10*expected_return_score(r.get('Expected_Return',0))+.15*float(r.get('Confidence',50))+.10*float(r.get('Direction_Confidence',50))+.10*float(r.get('ReliabilityScore',50))+.10*regime_direction_score(r.get('Direction','NEUTRAL'),regime)+.10*float(r.get('SectorScore',50))+.10*multi_horizon_score(r.get('MultiHorizonExpectedReturn',0))+.05*float(r.get('UncertaintyScore',50)))
 def _strict_trade_eligible(d):
  if d.empty:return d
@@ -51,7 +53,7 @@ def score_candidates(candidates,regime='SIDEWAYS'):
  if 'MultiHorizonExpectedReturn' not in d.columns:d['MultiHorizonExpectedReturn']=pd.to_numeric(d.get('Expected_Return',0),errors='coerce').fillna(0.)
  for c,v in [('SectorScore',50.),('UncertaintyScore',50.)]:
   if c not in d.columns:d[c]=v
- rel=load_reliability();d['ReliabilityScore']=d['Symbol'].map(rel).fillna(50.);d['TradeConfidence']=d.apply(calculate_trade_confidence,axis=1);d['TradeQuality']=d['TradeConfidence'].map(lambda x:'HIGH' if x>=75 else 'MEDIUM' if x>=60 else 'LOW');d['DirectionReturnAlignment']=d.apply(lambda r:direction_return_alignment(r.get('Direction','NEUTRAL'),r.get('Expected_Return',0)),axis=1);d['Score']=d.apply(lambda r:calculate_score(r,regime),axis=1);return _rank(d).reset_index(drop=True)
+ rel=load_reliability();d['ReliabilityScore']=d['Symbol'].map(rel).fillna(50.);d['DirectionReturnAlignment']=d.apply(lambda r:direction_return_alignment(r.get('Direction','NEUTRAL'),r.get('Expected_Return',0)),axis=1);d['TradeConfidence']=d.apply(calculate_trade_confidence,axis=1);d['TradeQuality']=d['TradeConfidence'].map(lambda x:'HIGH' if x>=75 else 'MEDIUM' if x>=60 else 'LOW');d['Score']=d.apply(lambda r:calculate_score(r,regime),axis=1);return _rank(d).reset_index(drop=True)
 def select_prediction_set(candidates,top_n=TOP_N,max_per_bucket=MAX_PER_PRICE_BUCKET,regime='SIDEWAYS'):
  s=score_candidates(candidates,regime)
  if s.empty:return s
@@ -60,20 +62,15 @@ def select_prediction_set(candidates,top_n=TOP_N,max_per_bucket=MAX_PER_PRICE_BU
   if c in p.columns:p=p[pd.to_numeric(p[c],errors='coerce').notna()]
  if p.empty:return p
  q=_apply_uncertainty_cap(p);q=q if not q.empty else p
- # Prediction ledger is capped at top_n. Bucket-first means first pass gives
- # each bucket representation; the remaining slots are filled by global rank.
- n=max(1,int(top_n) if top_n and int(top_n)>0 else TOP_N)
- bucket_count=p['PriceBucket'].nunique();minimum=min(n,bucket_count);b=_bucket_cap(q,1).head(minimum)
- remaining=_rank(q[~q['Symbol'].isin(b['Symbol'])]);out=pd.concat([b,remaining],ignore_index=True).drop_duplicates('Symbol').head(n)
+ n=max(1,int(top_n) if top_n and int(top_n)>0 else TOP_N);bucket_count=p['PriceBucket'].nunique();minimum=min(n,bucket_count);b=_bucket_cap(q,1).head(minimum);remaining=_rank(q[~q['Symbol'].isin(b['Symbol'])]);out=pd.concat([b,remaining],ignore_index=True).drop_duplicates('Symbol').head(n)
  return out.reset_index(drop=True)
 def select_top_stocks(candidates,top_n=TOP_N,regime='SIDEWAYS',min_score=65.,min_confidence=60.,min_trade_confidence=60.,max_per_bucket=MAX_PER_PRICE_BUCKET,bucket_only=False):
  s=score_candidates(candidates,regime)
  if s.empty:return s
- b=s[(s['Score']>=min_score)&(s['Confidence']>=min_confidence)&(s['TradeConfidence']>=min_trade_confidence)&(s['DirectionReturnAlignment']>=60)].copy();x=_apply_uncertainty_cap(_strict_trade_eligible(b));fallback=False
+ b=s[(s['Score']>=min_score)&(s['Confidence']>=min_confidence)&(s['TradeConfidence']>=min_trade_confidence)&(s['DirectionReturnAlignment']>=60)].copy();x=_apply_uncertainty_cap(_strict_trade_eligible(b))
  if x.empty:x=_apply_uncertainty_cap(b[b['Direction'].astype(str).str.upper().eq('UP')])
  if x.empty:x=b[b['Direction'].astype(str).str.upper().eq('UP')].copy()
- if x.empty:x=_apply_uncertainty_cap(s.copy());fallback=True
- if x.empty:x=s.copy();fallback=True
- x['SelectionTier']='PREDICTION_ONLY' if fallback else 'RECOMMENDED';x=_bucket_cap(x,max_per_bucket);n=None if top_n is None else int(top_n)
+ if x.empty:return s.iloc[0:0].copy()
+ x['SelectionTier']='RECOMMENDED';x=_bucket_cap(x,max_per_bucket);n=None if top_n is None else int(top_n)
  if n is None or n<=0:return x.reset_index(drop=True)
  return x.head(n).reset_index(drop=True)
