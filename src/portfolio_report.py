@@ -40,6 +40,34 @@ def _next_trading_date(value,days=1):
         while not _is_nse_trading_day(d):d+=timedelta(days=1)
     return d.isoformat()
 
+def _sell_plan(row,current_price,average_price,prediction_date):
+    """Build a deterministic sell target from the first reliable horizon.
+
+    A forecast must reach the configured minimum profit target before a dated
+    sell plan is emitted.  Low-confidence forecasts may still establish a
+    timing window, but their sell profit is capped at the minimum target.
+    """
+    try: avg=float(average_price)
+    except Exception: avg=np.nan
+    if not np.isfinite(avg) or avg<=0:
+        return 10.0, np.nan, "-", "-", "WAIT"
+    try: confidence=float(row.get("AI_Confidence",0) or 0)
+    except Exception: confidence=0.0
+    candidates=[]
+    for horizon in HORIZONS:
+        value=_num(row,f"Horizon_{horizon}D")
+        if np.isfinite(value) and value>=TARGET_PROFIT_PCT:
+            candidates.append((horizon,value))
+    if not candidates:
+        return TARGET_PROFIT_PCT, avg*(1+TARGET_PROFIT_PCT/100.0), "-", "-", "WAIT"
+    horizon,forecast=candidates[0]
+    planned_profit=float(forecast) if confidence>=MIN_AI_CONFIDENCE else TARGET_PROFIT_PCT
+    planned_profit=max(TARGET_PROFIT_PCT,planned_profit)
+    price=avg*(1+planned_profit/100.0)
+    window=f"{horizon}D"
+    date=_next_trading_date(prediction_date,horizon) if prediction_date else "-"
+    return planned_profit,price,window,date,"TARGET_DATE"
+
 def _num(row,name,default=np.nan):
     try:
         v=float(row.get(name,default));return v if np.isfinite(v) else default
