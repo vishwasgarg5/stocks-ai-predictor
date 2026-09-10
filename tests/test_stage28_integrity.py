@@ -22,9 +22,17 @@ def test_horizon_configuration_contains_full_year():
     from src.config import MULTI_HORIZONS
     assert tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)
 
+def test_full_nse_scan_uses_bounded_window():
+    from src.config import SCAN_PERIOD,HISTORY_PERIOD,PRESCREEN_N
+    assert SCAN_PERIOD=='3mo';assert HISTORY_PERIOD=='5y';assert PRESCREEN_N==150
+
 def test_cutoff_supervised_rows_are_strictly_before_cutoff():
     from src.features import prepare_supervised
     idx=pd.date_range('2026-01-01',periods=220,freq='D');df=pd.DataFrame({'Open':100+np.arange(220)*.1,'High':101+np.arange(220)*.1,'Low':99+np.arange(220)*.1,'Close':100+np.arange(220)*.1,'Volume':100000},index=idx);cutoff=idx[-20];sup=prepare_supervised(df,cutoff);assert not sup.empty and sup.index.max()<cutoff
+
+def test_snapshot_is_fail_closed_when_stale():
+    from src.data_snapshot import DataSnapshot
+    assert not DataSnapshot('AAA','2026-09-10','2026-09-09',100,'GITHUB_OHLCV','INVALID',('STALE',)).usable
 
 def test_report_never_renders_nan():
     from src.telegram_report import morning_report
