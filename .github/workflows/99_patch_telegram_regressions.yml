@@ -6,7 +6,6 @@ permissions:
   contents: write
 jobs:
   repair:
-    if: ${{ github.event.head_commit.message != 'Fix Stage 10 regression report contracts' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
