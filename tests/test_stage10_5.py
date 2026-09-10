@@ -24,7 +24,7 @@ def test_core_modules_import():
 def test_config_is_stage28():
     from src.config import MODEL_VERSION,STAGE_NAME,HISTORY_PERIOD,TOP_N,MAX_UNIVERSE,MULTI_HORIZONS,PRICE_BUCKET_NAMES,MAX_PER_PRICE_BUCKET,FINAL_BEST_PER_BUCKET,PREDICTION_TOP_N
     assert MODEL_VERSION.startswith("stage28") and STAGE_NAME.startswith("Stage 28") and HISTORY_PERIOD=="5y" and TOP_N==10 and PREDICTION_TOP_N==10 and MAX_UNIVERSE==3000 and tuple(MULTI_HORIZONS)==(1,3,5,7,10,20,60,90,180,365)
-    assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
+    assert PRICE_BUCKET_NAMES==["10-49","50-99","100-249","250-499","500-999","1000-2499",">2500"] and MAX_PER_PRICE_BUCKET==6 and FINAL_BEST_PER_BUCKET==1
 def test_next_session_ohlcv_target_alignment():
     df=pd.DataFrame({"Open":[10,11,12],"High":[11,12,13],"Low":[9,10,11],"Close":[10.5,11.5,12.5],"Volume":[100,110,120]})
     for c in ["Open","High","Low","Close","Volume"]: df[f"Target_{c}"]=df[c].shift(-1)
@@ -45,7 +45,7 @@ def test_price_bucket_limit_is_configurable():
     r=select_top_stocks(pd.DataFrame(rows),top_n=None,max_per_bucket=6); assert len(r)==6
 def test_direction_return_conflict_reduces_trade_confidence():
     from src.selection import calculate_trade_confidence
-    base={"Confidence":95,"Direction_Confidence":95,"ReliabilityScore":80,"Direction":"UP","MultiHorizonExpectedReturn":5,"Horizon_1D":5,"Horizon_3D":5,"Horizon_5D":5,"Horizon_7D":5,"Horizon_20D":5}
+    base={"Confidence":95,"Direction_Confidence":95,"ReliabilityScore":80,"Direction":"UP","MultiHorizonExpectedReturn":5,"Horizon_1D":5,"Horizon_3D":5,"Horizon_5D":5,"Horizon_20D":5}
     assert calculate_trade_confidence({**base,"Expected_Return":5})>calculate_trade_confidence({**base,"Expected_Return":-5})
 def test_down_direction_is_never_selected():
     from src.selection import select_top_stocks
