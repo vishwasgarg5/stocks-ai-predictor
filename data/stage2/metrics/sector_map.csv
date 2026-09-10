@@ -3,6 +3,8 @@ Symbol,Sector
 63MOONS,Technology
 AARTIDRUGS,Healthcare
 ACMESOLAR,Utilities
+ADANIPORTS,Industrials
+ADANIPOWER,Utilities
 ADOR,Industrials
 AEGISVOPAK,Energy
 AEROENTER,Basic Materials
@@ -26,21 +28,26 @@ ARFIN,Basic Materials
 ARIES,Basic Materials
 ARIHANTCAP,Financial Services
 ARTEMISMED,UNKNOWN
+ARVIND,Consumer Cyclical
 ASIANENE,Energy
 ATHERENERG,Consumer Cyclical
 ATLANTAELE,Industrials
 AUROPHARMA,Healthcare
+AVL,Consumer Cyclical
 AWL,Consumer Defensive
 AXISBANK,Financial Services
 AXISCADES,Industrials
 BAJAJHCARE,UNKNOWN
 BAJAJHIND,Consumer Defensive
+BALAMINES,Basic Materials
 BALMLAWRIE,Industrials
 BBTC,Consumer Defensive
+BCG,Communication Services
 BEL,Industrials
 BEML,Industrials
 BEPL,UNKNOWN
 BESTAGRO,Basic Materials
+BHAGYANGR,Basic Materials
 BHEL,Industrials
 BIRLACABLE,Technology
 BLKASHYAP,Industrials
@@ -50,16 +57,20 @@ BPCL,Energy
 BRIGADE,Real Estate
 CANHLIFE,Financial Services
 CANTABIL,Consumer Cyclical
+CAPLIPOINT,Healthcare
 CARERATING,Financial Services
+CARRARO,Consumer Cyclical
 CARTRADE,Consumer Cyclical
 CASTROLIND,Energy
 CDSL,Financial Services
 CENTENKA,Consumer Cyclical
+CGPOWER,Industrials
 CLEAN,Basic Materials
 CLSEL,Consumer Defensive
 COALINDIA,Energy
 COFORGE,Technology
 COHANCE,Healthcare
+COMSYN,Consumer Cyclical
 CONFIPET,Energy
 CONTROLPR,Industrials
 CRAFTSMAN,Consumer Cyclical
@@ -69,8 +80,10 @@ CUB,Financial Services
 DCW,Basic Materials
 DEEPINDS,Energy
 DEN,Communication Services
+DIFFNKG,Industrials
 DIVISLAB,Healthcare
 DLF,Real Estate
+DOLPHIN,Energy
 DWARKESH,Consumer Defensive
 DYCL,Industrials
 DYNAMATECH,Consumer Cyclical
@@ -78,7 +91,12 @@ EBGNG,Technology
 ECLERX,Technology
 EDELWEISS,Financial Services
 EFCIL,Real Estate
+ELECTCAST,Industrials
 ELGIEQUIP,Industrials
+ELLEN,Basic Materials
+EMCURE,Healthcare
+EMMVEE,Technology
+EPACKPEB,Industrials
 EPIGRAL,Basic Materials
 EXPLEOSOL,Technology
 FCL,Basic Materials
