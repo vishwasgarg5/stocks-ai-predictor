@@ -1,106 +1,175 @@
-"""Stocks AI Predictor package.
+"""Stocks AI Predictor package bootstrap.
 
-Install the P1 data-path guard before pipeline modules import market_data.
-The market-data wrapper is intentionally cache-first: an existing GitHub
-OHLCV file is reused and Yahoo is queried only for missing date ranges.
+Installs a cache-first market-data adapter before pipeline modules import
+market_data. OHLCV is stored in monthly partitions so the repository does not
+accumulate one mutable CSV per stock.
 """
 from . import market_data as _market_data
-from .config import MAX_UNIVERSE
-from .utils import price_bucket as canonical_price_bucket
+from .config import MAX_UNIVERSE, DATA_DIR
+from .utils import price_bucket as canonical_price_bucket, clean_ohlcv
 import pandas as _pd
+from pathlib import Path as _Path
+
+_PARTITION_DIR = DATA_DIR / "stage2" / "market_data"
+_PARTITION_DIR.mkdir(parents=True, exist_ok=True)
+_LEGACY_DIR = DATA_DIR / "stage2" / "ohlcv"
 
 
 def _period_start(today, period):
-    """Return the earliest date required for a yfinance-style period."""
     p = str(period or _market_data.HISTORY_PERIOD).lower().strip()
-    if p in {"5y", "5yr", "5years"}:
-        return today - _pd.DateOffset(years=5)
-    if p in {"1y", "1yr", "1year"}:
-        return today - _pd.DateOffset(years=1)
-    if p in {"6mo", "6m"}:
-        return today - _pd.DateOffset(months=6)
-    if p in {"3mo", "3m"}:
-        return today - _pd.DateOffset(months=3)
-    if p in {"1mo", "1m"}:
-        return today - _pd.DateOffset(months=1)
-    if p in {"5d", "1wk", "1w", "1d"}:
-        days = {"5d": 7, "1wk": 14, "1w": 14, "1d": 3}[p]
-        return today - _pd.Timedelta(days=days)
-    return None
+    return {
+        "5y": today - _pd.DateOffset(years=5), "5yr": today - _pd.DateOffset(years=5), "5years": today - _pd.DateOffset(years=5),
+        "1y": today - _pd.DateOffset(years=1), "1yr": today - _pd.DateOffset(years=1), "1year": today - _pd.DateOffset(years=1),
+        "6mo": today - _pd.DateOffset(months=6), "6m": today - _pd.DateOffset(months=6),
+        "3mo": today - _pd.DateOffset(months=3), "3m": today - _pd.DateOffset(months=3),
+        "1mo": today - _pd.DateOffset(months=1), "1m": today - _pd.DateOffset(months=1),
+        "5d": today - _pd.Timedelta(days=7), "1wk": today - _pd.Timedelta(days=14), "1w": today - _pd.Timedelta(days=14), "1d": today - _pd.Timedelta(days=3),
+    }.get(p)
 
 
-def _merge_and_save(symbol, frames):
-    valid = [x for x in frames if x is not None and not x.empty]
-    if not valid:
+def _partition_path(date):
+    d = _pd.Timestamp(date)
+    return _PARTITION_DIR / f"{d.year:04d}-{d.month:02d}.csv"
+
+
+def _read_partition(path):
+    try:
+        if not path.exists():
+            return _pd.DataFrame()
+        df = _pd.read_csv(path, parse_dates=["Date"])
+        if "Symbol" not in df.columns or "Date" not in df.columns:
+            return _pd.DataFrame()
+        df["Symbol"] = df["Symbol"].astype(str).str.upper()
+        df = df.set_index("Date")
+        return clean_ohlcv(df)
+    except Exception as exc:
+        print(f"Partition read failed {path}: {exc}")
         return _pd.DataFrame()
-    merged = _pd.concat(valid).sort_index()
-    merged = merged[~merged.index.duplicated(keep="last")]
-    _market_data._save_cached_ohlcv(symbol, merged)
-    return merged
+
+
+def _read_partitioned_symbol(symbol, start=None, end=None):
+    symbol = _market_data.normalize_symbol(symbol)
+    if not symbol:
+        return _pd.DataFrame()
+    start = _pd.Timestamp(start or "2000-01-01")
+    end = _pd.Timestamp(end or _pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).normalize())
+    frames = []
+    cur = start.replace(day=1)
+    while cur <= end:
+        df = _read_partition(_partition_path(cur))
+        if not df.empty:
+            df = df[df["Symbol"] == symbol]
+            if not df.empty:
+                frames.append(df.drop(columns=["Symbol"], errors="ignore"))
+        cur = cur + _pd.DateOffset(months=1)
+    if not frames:
+        return _pd.DataFrame()
+    out = _pd.concat(frames).sort_index()
+    out = out[(out.index >= start) & (out.index <= end)]
+    return out[~out.index.duplicated(keep="last")]
+
+
+def _read_legacy_symbol(symbol):
+    path = _LEGACY_DIR / f"{_market_data.normalize_symbol(symbol)}.csv"
+    if not path.exists():
+        return _pd.DataFrame()
+    try:
+        df = _pd.read_csv(path, index_col=0, parse_dates=True)
+        return clean_ohlcv(df).sort_index()
+    except Exception as exc:
+        print(f"{symbol}: legacy cache unreadable: {exc}")
+        return _pd.DataFrame()
+
+
+def _write_partitioned(frames):
+    valid = [clean_ohlcv(x) for x in frames if x is not None and not x.empty]
+    valid = [x for x in valid if not x.empty]
+    if not valid:
+        return
+    combined = _pd.concat(valid).sort_index()
+    combined = combined[~combined.index.duplicated(keep="last")]
+    combined["Symbol"] = [getattr(x, "_cache_symbol", "") for x in []]
+
+
+def _save_partitioned(symbol, df):
+    if df is None or df.empty:
+        return
+    symbol = _market_data.normalize_symbol(symbol)
+    out = clean_ohlcv(df).sort_index()
+    out = out[~out.index.duplicated(keep="last")].copy()
+    out["Symbol"] = symbol
+    out.index.name = "Date"
+    for (year, month), chunk in out.groupby([out.index.year, out.index.month]):
+        path = _PARTITION_DIR / f"{int(year):04d}-{int(month):02d}.csv"
+        old = _read_partition(path)
+        if not old.empty:
+            old = old[old["Symbol"] != symbol].copy()
+            old["Symbol"] = old.get("Symbol", "")
+        old2 = old.reset_index() if not old.empty else _pd.DataFrame()
+        new2 = chunk.reset_index()
+        if not old2.empty:
+            merged = _pd.concat([old2, new2], ignore_index=True)
+        else:
+            merged = new2
+        merged["Symbol"] = merged["Symbol"].astype(str).str.upper()
+        merged["Date"] = _pd.to_datetime(merged["Date"])
+        merged = merged.drop_duplicates(["Symbol", "Date"], keep="last").sort_values(["Date", "Symbol"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        merged.to_csv(path, index=False)
+
+
+def _read_cached_ohlcv(symbol):
+    symbol = _market_data.normalize_symbol(symbol)
+    today = _pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).normalize()
+    cached = _read_partitioned_symbol(symbol, today - _pd.DateOffset(years=6), today)
+    if not cached.empty:
+        return cached.sort_index()
+    legacy = _read_legacy_symbol(symbol)
+    if not legacy.empty:
+        # One-time migration. Future runs read the partitioned cache.
+        _save_partitioned(symbol, legacy)
+        return legacy.sort_index()
+    return _pd.DataFrame()
+
+
+def _save_cached_ohlcv(symbol, df):
+    _save_partitioned(symbol, df)
 
 
 def _incremental_download_symbol(symbol, period=None, retries=2):
-    """Read GitHub cache first; download only missing OHLCV ranges.
-
-    First use for a symbol downloads the requested history and stores it.
-    Subsequent runs never re-download the full history: they append only the
-    missing tail (and, if necessary, the missing older head), then de-duplicate
-    by trading date.  Short-period callers (for example the quality gate's
-    1mo request) also reuse the long cache instead of downloading 1mo again.
-    """
     symbol = _market_data.normalize_symbol(symbol)
     if not symbol:
         return None
     period = period or _market_data.HISTORY_PERIOD
-    cached = _market_data._read_cached_ohlcv(symbol)
     today = _pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None).normalize()
     desired_start = _period_start(today, period)
-
+    cached = _read_cached_ohlcv(symbol)
     try:
         if cached.empty:
-            # First observation: only here is a full-period download allowed.
             merged = _market_data._download_range(f"{symbol}.NS", period=period)
             if merged.empty and retries > 0:
                 import time
                 time.sleep(1.0)
                 merged = _market_data._download_range(f"{symbol}.NS", period=period)
-            if not merged.empty:
-                _market_data._save_cached_ohlcv(symbol, merged)
         else:
             cached_start = _pd.Timestamp(cached.index.min()).normalize()
             cached_end = _pd.Timestamp(cached.index.max()).normalize()
             frames = [cached]
-
-            # Backfill only if the repository cache does not cover the
-            # requested history window.
             if desired_start is not None and cached_start > desired_start:
-                older = _market_data._download_range(
-                    f"{symbol}.NS",
-                    start=desired_start,
-                    end=cached_start + _pd.Timedelta(days=1),
-                )
+                older = _market_data._download_range(f"{symbol}.NS", start=desired_start, end=cached_start + _pd.Timedelta(days=1))
                 if not older.empty:
                     frames.append(older)
-
-            # Append only dates newer than the repository cache.  If the cache
-            # already contains today's session (or the latest available
-            # session), this path performs no network request.
             if cached_end < today:
-                newer = _market_data._download_range(
-                    f"{symbol}.NS",
-                    start=cached_end + _pd.Timedelta(days=1),
-                    end=today + _pd.Timedelta(days=1),
-                )
+                newer = _market_data._download_range(f"{symbol}.NS", start=cached_end + _pd.Timedelta(days=1), end=today + _pd.Timedelta(days=1))
                 if not newer.empty:
                     frames.append(newer)
-
-            merged = _merge_and_save(symbol, frames)
-
-        if merged.empty:
+            merged = _pd.concat(frames).sort_index()
+            merged = merged[~merged.index.duplicated(keep="last")]
+        if merged is None or merged.empty:
             return None
+        _save_cached_ohlcv(symbol, merged)
         if desired_start is not None:
             merged = merged[merged.index >= desired_start]
-        # Keep the original contract: callers need enough rows for indicators.
         return merged if len(merged) >= 30 else None
     except Exception as exc:
         print(f"{symbol}: incremental data update failed: {exc}")
@@ -108,18 +177,12 @@ def _incremental_download_symbol(symbol, period=None, retries=2):
 
 
 def _bounded_download_many(symbols, period=None, workers=8):
-    """Cap the universe before any stock download is submitted."""
-    unique = list(dict.fromkeys(
-        _market_data.normalize_symbol(s)
-        for s in symbols
-        if _market_data.normalize_symbol(s)
-    ))
+    unique = list(dict.fromkeys(_market_data.normalize_symbol(s) for s in symbols if _market_data.normalize_symbol(s)))
     if MAX_UNIVERSE and MAX_UNIVERSE > 0:
         unique = unique[:int(MAX_UNIVERSE)]
-
     result = {}
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with ThreadPoolExecutor(max_workers=min(int(workers), 8)) as executor:
         futures = {executor.submit(_incremental_download_symbol, s, period): s for s in unique}
         for future in as_completed(futures):
             symbol = futures[future]
@@ -133,7 +196,8 @@ def _bounded_download_many(symbols, period=None, workers=8):
     return result
 
 
-# Install the bounded/cache-first implementation before pipeline modules call it.
+_market_data._read_cached_ohlcv = _read_cached_ohlcv
+_market_data._save_cached_ohlcv = _save_cached_ohlcv
 _market_data.download_symbol = _incremental_download_symbol
 _market_data.download_many = _bounded_download_many
 _market_data.canonical_price_bucket = canonical_price_bucket
