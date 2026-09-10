@@ -31,6 +31,10 @@ def _partition_path(date):
     return _PARTITION_DIR / f"{d.year:04d}-{d.month:02d}.csv"
 
 
+def _empty_partition():
+    return pd.DataFrame(columns=["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"])
+
+
 def _read_partition(path):
     path = Path(path)
     with _CACHE_LOCK:
@@ -38,11 +42,11 @@ def _read_partition(path):
         if cached is not None:
             return cached.copy()
         if not path.exists():
-            return pd.DataFrame(columns=["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"])
+            return _empty_partition()
         try:
             df = pd.read_csv(path)
             if "Date" not in df.columns:
-                return pd.DataFrame(columns=["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"])
+                return _empty_partition()
             df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.normalize()
             if "Symbol" not in df.columns:
                 df["Symbol"] = ""
@@ -53,27 +57,28 @@ def _read_partition(path):
             _PARTITION_MEMORY[path] = df.copy()
             return df
         except Exception:
-            return pd.DataFrame(columns=["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"])
+            return _empty_partition()
 
 
 def _read_partitioned_symbol(symbol, start=None, end=None):
-    start, end = start or _period_start()[0], end or _period_start()[1]
+    start = pd.Timestamp(start) if start is not None else _period_start()[0]
+    end = pd.Timestamp(end) if end is not None else _period_start()[1]
     frames = []
-    month = pd.Timestamp(start).replace(day=1)
-    last = pd.Timestamp(end).replace(day=1)
+    month = start.replace(day=1)
+    last = end.replace(day=1)
     while month <= last:
         df = _read_partition(_partition_path(month))
         if not df.empty:
             x = df[df["Symbol"].astype(str).str.upper() == str(symbol).upper()].copy()
             if not x.empty:
                 frames.append(x)
-        month = month + pd.DateOffset(months=1)
+        month += pd.DateOffset(months=1)
     if not frames:
         return None
     out = pd.concat(frames, ignore_index=True)
     out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
     out = out.dropna(subset=["Date"]).drop_duplicates("Date", keep="last").sort_values("Date")
-    out = out[(out["Date"] >= pd.Timestamp(start)) & (out["Date"] <= pd.Timestamp(end))]
+    out = out[(out["Date"] >= start) & (out["Date"] <= end)]
     return _market_data.clean_ohlcv(out.set_index("Date"))
 
 
@@ -110,9 +115,8 @@ def _save_partitioned(symbol, df):
         x = x.rename(columns={x.columns[0]: "Date"})
     x["Date"] = pd.to_datetime(x["Date"], errors="coerce").dt.normalize()
     x["Symbol"] = str(symbol).upper()
-    x = x.dropna(subset=["Date"])
     cols = ["Date", "Symbol", "Open", "High", "Low", "Close", "Volume"]
-    x = x[cols]
+    x = x[cols].dropna(subset=["Date"])
     _PARTITION_DIR.mkdir(parents=True, exist_ok=True)
     with _CACHE_LOCK:
         for month, group in x.groupby(x["Date"].dt.to_period("M")):
