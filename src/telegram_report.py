@@ -2,7 +2,7 @@ import html,math,os,re,requests
 import numpy as np
 import pandas as pd
 from .config import TELEGRAM_MAX_LENGTH,MODEL_VERSION
-_SECTION='\n§§TELEGRAM_SECTION§§\n';REPORT_HORIZONS=(3,7,10,20,60,90,180,365);_BUCKET_ORDER=['10-49','50-99','100-249','250-499','500-999','1000-2499','>2500'];_BUCKET_LABELS={'B7':'10-49','B6':'50-99','B5':'100-249','B4':'250-499','B3':'500-999','B2':'1000-2499','B1':'>2500'}
+_SECTION='\n§§TELEGRAM_SECTION§§\n';REPORT_HORIZONS=(3,7,10,20,60,90,180,365);_BUCKET_ORDER=['<10','10-49','50-99','100-249','250-499','500-999','1000-2499','>2500'];_BUCKET_LABELS={'B0':'<10','B7':'10-49','B6':'50-99','B5':'100-249','B4':'250-499','B3':'500-999','B2':'1000-2499','B1':'>2500'}
 def _num(v,default=None):
  try:
   if isinstance(v,str):v=v.replace('₹','').replace(',','').replace('%','').strip()
@@ -64,6 +64,8 @@ def _market(s,regime):
  for n,k in (('NIFTY','NIFTY'),('BANK','BANKNIFTY'),('FINN','FINNIFTY'),('MIDCP','MIDCPNIFTY'),('VIX','VIX')):
   x=(s or {}).get(k,{}) or {};rows.append([n,_fmt(x.get('Close')),_pct(x.get('Change1D'))])
  b=(s or {}).get('Breadth',{}) or {};return _table(['Index','Value','1D%'],rows)+[f"Breadth: {int(_num(b.get('Advancers'),0) or 0)}↑ / {int(_num(b.get('Decliners'),0) or 0)}↓ | Regime: {regime or '-'}"]
+def _accuracy_section(a):
+ a=a or {};prev=a.get('PreviousAccuracy',a.get('PreviousDirectionAccuracy'));cur=a.get('CurrentAccuracy',a.get('CurrentDirectionAccuracy'));mape=a.get('OverallMAPE');return ['📊 *MODEL ACCURACY*',*_table(['Metric','Previous','Current','Change'],[['Direction accuracy',_accuracy(prev),_accuracy(cur),_pct((_num(cur)-_num(prev)) if _num(cur) is not None and _num(prev) is not None else None)],['Overall OHLC MAPE',_accuracy(a.get('PreviousMAPE')),_accuracy(mape),_pct((_num(mape)-_num(a.get('PreviousMAPE'))) if _num(mape) is not None and _num(a.get('PreviousMAPE')) is not None else None)]])]
 def _bucket_sections(s):
  if s is None or s.empty or 'PriceBucket' not in s.columns:return ['🎯 *PREDICTION SET BY PRICE BUCKET*','No valid prediction candidates.']
  out=['🎯 *PREDICTION SET BY PRICE BUCKET*']
@@ -97,9 +99,9 @@ def _jump(x):
  if x is None or x.empty:return ['🔥 *JUMP WATCH — TOP 5*','No valid jump candidates.']
  rows=[]
  for _,r in x.head(5).iterrows():
-  c,t,p=_num(r.get('Current_Price')),_num(r.get('Target_Level')),_num(r.get('Jump_Probability'))
+  c,t,p=_num(r.get('Current_Price')),_num(r.get('Target_Level')),_num(r.get('Jump_Probability',r.get('JumpProbability')))
   if c is not None and t is not None:rows.append([r.get('Symbol','-'),f'₹{_fmt(c)}',f'₹{_fmt(t)}',_pct((t/c-1)*100),'N/A' if p is None or p<=0 else f'{p:.0f}%'])
- return ['🔥 *JUMP WATCH — TOP 5*',*_table(['Stock','CMP','Target','Upside','Prob'],rows)] if rows else ['🔥 *JUMP WATCH — TOP 5*','No valid jump candidates.']
+ return ['🔥 *JUMP WATCH — TOP 5*',*_table(['Stock','CMP','Target','Upside','Score'],rows)] if rows else ['🔥 *JUMP WATCH — TOP 5*','No valid jump candidates.']
 def _intraday(x):
  if x is None or x.empty:return ['⚡ *INTRADAY TOP 5*','No qualifying intraday setup.']
  return ['⚡ *INTRADAY TOP 5*',*_table(['Stock','Status','Bias','CMP','Target','SL','Conf'],[[r.get('Symbol','-'),r.get('Status','-'),_decision(r.get('Bias')),f"₹{_fmt(r.get('Current'))}",f"₹{_fmt(r.get('Target'))}",f"₹{_fmt(r.get('StopLoss'))}",f"{_num(r.get('Confidence'),0):.0f}%"] for _,r in x.head(5).iterrows()])]
@@ -127,4 +129,4 @@ def _evaluation_sections(e):
 def evening_report(market_date,evaluation,metrics,retraining,**kwargs):
  metrics,retraining=metrics or {},retraining or {};return '\n'.join([f'🌙 *AI NSE EVENING REPORT*\n📅 {market_date}\n⚙️ {MODEL_VERSION}',_SECTION,*_evaluation_sections(evaluation),_SECTION,'📈 *MODEL ACCURACY*',f"Samples: {int(_num(metrics.get('Samples'),0) or 0)} | Overall MAPE: {_accuracy(metrics.get('OverallMAPE'))} | Close MAPE: {_accuracy(metrics.get('CloseMAPE'))}",f"Direction accuracy: {_accuracy(metrics.get('DirectionAccuracy'))}",_SECTION,'🧠 *MODEL LEARNING*',f"Retrained: {'YES' if retraining.get('Retrained',False) else 'NO'} | Decision: {retraining.get('Decision','-')}",_SECTION,*_portfolio(kwargs.get('portfolio',{}))])
 def morning_report(prediction_date,cutoff_date,selected,jump_watchlist,intraday,**kwargs):
- scan=kwargs.get('scan',{});return '\n'.join([f'📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}',_SECTION,'📊 *MARKET OVERVIEW*',*_market(kwargs.get('market_snapshot',{}),kwargs.get('regime','-')),_scan(scan),_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(kwargs.get('ipo',pd.DataFrame())),_SECTION,*_portfolio(kwargs.get('portfolio',{}))])
+ scan=kwargs.get('scan',{});accuracy=kwargs.get('accuracy',{});return '\n'.join([f'📈 *AI NSE MORNING REPORT*\n📅 {prediction_date}\n⚙️ {MODEL_VERSION}\nData cutoff: {cutoff_date}',_SECTION,'📊 *MARKET OVERVIEW*',*_market(kwargs.get('market_snapshot',{}),kwargs.get('regime','-')),_scan(scan),_SECTION,*_accuracy_section(accuracy),_SECTION,*_bucket_sections(selected),_SECTION,*_best_pick_table(selected),_SECTION,*_prediction_table(selected),_SECTION,*_horizon_table(selected),_SECTION,*_jump(jump_watchlist),_SECTION,*_intraday(intraday),_SECTION,*_ipo(kwargs.get('ipo',pd.DataFrame())),_SECTION,*_portfolio(kwargs.get('portfolio',{}))])
