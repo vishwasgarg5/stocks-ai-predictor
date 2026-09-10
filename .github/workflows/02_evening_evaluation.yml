@@ -2,7 +2,7 @@ name: Stage 28 - Evening Evaluation
 
 on:
   schedule:
-    - cron: "0 11 * * 1-5" # 16:30 IST, Monday-Friday
+    - cron: "0 11 * * 1-5"
   workflow_dispatch:
 
 concurrency:
@@ -24,32 +24,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
-
+          fetch-depth: 1
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-
       - name: Syntax check
         run: python -m compileall -q src
-
       - name: Full regression suite
         run: python -m pytest -q tests/
-
       - name: Market data quality gate
         run: python -m src.live_quality_gate evening
-
       - name: Run evening evaluation and learning
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.evening
-
       - name: Verify prediction lineage
         run: |
           python - <<'PY'
@@ -58,32 +51,28 @@ jobs:
           from src.utils import today_ist
           market_date = today_ist()
           prediction_date = latest_prediction_date(market_date)
-          assert prediction_date is not None, "No prediction ledger found"
+          assert prediction_date is not None, "No prediction ledger found for market date"
           predictions = load_predictions(prediction_date)
           evaluation = pd.read_csv(evaluation_path(market_date))
           assert not predictions.empty and not evaluation.empty, "Prediction/evaluation ledger is empty"
           assert "Prediction_ID" in predictions.columns and "Prediction_ID" in evaluation.columns
           expected = dict(zip(predictions["Symbol"].astype(str), predictions["Prediction_ID"].astype(str)))
-          for _, row in evaluation.iterrows():
-              assert expected.get(str(row["Symbol"])) == str(row["Prediction_ID"]), f"Lineage mismatch: {row['Symbol']}"
+          actual = dict(zip(evaluation["Symbol"].astype(str), evaluation["Prediction_ID"].astype(str)))
+          assert set(actual) == set(expected), f"Evaluation symbol set mismatch: missing={sorted(set(expected)-set(actual))[:10]} extra={sorted(set(actual)-set(expected))[:10]}"
+          assert actual == expected, "Prediction_ID lineage mismatch"
           required = ["Pred_Open","Pred_High","Pred_Low","Pred_Close","Actual_Open","Actual_High","Actual_Low","Actual_Close"]
           missing = [c for c in required if c not in evaluation.columns]
           assert not missing, f"Missing evaluation fields: {missing}"
-          print(f"Verified {len(evaluation)} evaluation rows against {len(predictions)} immutable predictions")
+          print(f"Verified exact lineage for {len(evaluation)} evaluation rows")
           PY
-
       - name: Quality controls
         run: python -m src.quality_controls "$(date +%F)"
-
       - name: Commit generated state
         run: |
           git config user.name "stocks-ai-predictor"
           git config user.email "actions@github.com"
           git add data/stage2/
-          if git diff --cached --quiet; then
-            echo "No generated state changes."
-            exit 0
-          fi
+          if git diff --cached --quiet; then echo "No generated state changes."; exit 0; fi
           git commit -m "Update Stage 28 evening evaluation state"
           git pull --rebase origin main
-          git push
+          git push origin HEAD:${GITHUB_REF_NAME}
