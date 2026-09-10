@@ -3,7 +3,17 @@ import pandas as pd
 from .utils import clean_ohlcv
 
 def rsi(series,period=14):
-    delta=series.diff();gain=delta.clip(lower=0);loss=-delta.clip(upper=0);avg_gain=gain.rolling(period).mean();avg_loss=loss.rolling(period).mean();rs=avg_gain/avg_loss.replace(0,np.nan);return 100-(100/(1+rs))
+    delta=series.diff();gain=delta.clip(lower=0);loss=-delta.clip(upper=0);avg_gain=gain.rolling(period).mean();avg_loss=loss.rolling(period).mean()
+    rs=avg_gain.div(avg_loss.replace(0,np.nan))
+    out=100-(100/(1+rs))
+    # A zero average loss means the lookback contains no losses, so RSI is 100
+    # rather than NaN. If both gains and losses are zero, price is flat and RSI
+    # is neutral at 50. Keeping these edge cases finite prevents valid training
+    # rows from being discarded by prepare_supervised().
+    no_loss=avg_loss.eq(0)&avg_loss.notna()
+    flat=no_loss&avg_gain.eq(0)
+    out=out.mask(no_loss&~flat,100.0).mask(flat,50.0)
+    return out
 
 def atr(df,period=14):
     high=df["High"];low=df["Low"];close=df["Close"];previous_close=close.shift(1);tr=pd.concat([high-low,(high-previous_close).abs(),(low-previous_close).abs()],axis=1).max(axis=1);return tr.rolling(period).mean()
